@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #0a0f0d;
+  --bg-card: #111a14;
+  --border-subtle: rgba(34, 197, 94, 0.12);
+  --glow-green: rgba(34, 197, 94, 0.35);
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: #e2e8f0;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+/* Ambient glow on stat cards */
+.card-glow {
+  box-shadow: 0 0 0 1px var(--border-subtle), 0 4px 24px rgba(0, 0, 0, 0.4);
+  transition: box-shadow 0.2s ease;
+}
+
+.card-glow:hover {
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.3), 0 8px 32px var(--glow-green);
+}
+
+.card-glow-alert {
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.3), 0 4px 24px rgba(239, 68, 68, 0.15);
+}
+
+.card-glow-alert:hover {
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.5), 0 8px 32px rgba(239, 68, 68, 0.3);
+}
+
+/* Subtle scanline texture */
+.scanline::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+@layer utilities {
+  .text-glow-green {
+    text-shadow: 0 0 20px rgba(34, 197, 94, 0.5);
+  }
+}

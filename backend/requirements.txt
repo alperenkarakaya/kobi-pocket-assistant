@@ -1,0 +1,13 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+httpx==0.28.0
+python-multipart==0.0.17
+Pillow>=10.4.0
+google-generativeai>=0.8.3
+crewai>=0.76.0
+litellm>=1.50.0
+python-telegram-bot==21.6
