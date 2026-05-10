@@ -8,6 +8,7 @@ httpx==0.28.0
 python-multipart==0.0.17
 Pillow>=10.4.0
 google-generativeai>=0.8.3
-crewai>=0.76.0
+crewai[google-genai]>=1.0.0
 litellm>=1.50.0
+starlette>=0.40.0,<0.42.0
 python-telegram-bot==21.6

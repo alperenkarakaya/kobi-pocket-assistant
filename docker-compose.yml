@@ -8,7 +8,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
       - sqlite_data:/app/data
     environment:
       - DATABASE_URL=sqlite:///./data/kobi_assistant.db
@@ -20,10 +19,12 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # Must point to the HOST machine's port 8000 — this is what the
+        # user's browser will call, not an internal Docker hostname.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
     ports:
       - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://backend:8000
     depends_on:
       - backend
     restart: unless-stopped
