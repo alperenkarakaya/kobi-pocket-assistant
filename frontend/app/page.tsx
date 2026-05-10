@@ -101,9 +101,9 @@ export default function DashboardPage() {
 
   const handleAnalyze = async () => {
     setAnalyzing(true);
-    const toastId = toast.loading("Yapay zeka stok analizi yapıyor...");
+    const toastId = toast.loading("AI Crew analiz yapıyor (~30 saniye)...");
     try {
-      const res = await fetch(`${API}/api/analyze-stocks`);
+      const res = await fetch(`${API}/api/analyze-stocks`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail ?? "Analiz başarısız");
@@ -114,8 +114,8 @@ export default function DashboardPage() {
       const newCount = approvals.length;
       toast.success(
         newCount > 0
-          ? `✅ ${newCount} kritik ürün için tedarik e-postası taslağı oluşturuldu.`
-          : "✅ Analiz tamamlandı — tüm stoklar yeterli seviyede.",
+          ? `🤖 AI Crew tamamlandı — ${newCount} kritik ürün için tedarik talebi oluşturuldu.`
+          : "✅ AI Crew tamamlandı — tüm stoklar yeterli seviyede.",
         { id: toastId }
       );
     } catch (err: unknown) {
@@ -215,7 +215,7 @@ export default function DashboardPage() {
               ) : (
                 <Sparkles size={15} />
               )}
-              {analyzing ? "Analiz ediliyor..." : "Yapay Zeka Analizi Başlat"}
+              {analyzing ? "Crew çalışıyor..." : "AI Crew Analizi Başlat"}
             </button>
 
             {/* Live status */}

@@ -8,15 +8,31 @@ import models  # noqa: F401 — ensures models are registered with Base before c
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create all tables on startup (idempotent — safe to run repeatedly)."""
+    """Startup: create DB tables + start Telegram bot. Shutdown: stop bot gracefully."""
     Base.metadata.create_all(bind=engine)
+
+    # ── Telegram bot (non-blocking asyncio polling) ─────────────────────────
+    from services.telegram_bot import build_application
+    telegram_app = build_application()
+    if telegram_app:
+        await telegram_app.initialize()
+        await telegram_app.start()
+        await telegram_app.updater.start_polling(drop_pending_updates=True)
+        print("🤖 Telegram botu başlatıldı.")
+
     yield
+
+    if telegram_app:
+        await telegram_app.updater.stop()
+        await telegram_app.stop()
+        await telegram_app.shutdown()
+        print("🤖 Telegram botu durduruldu.")
 
 
 app = FastAPI(
     title="KOBI Pocket Assistant API",
-    description="Agricultural Cooperative SME Assistant — WhatsApp + AI + Dashboard",
-    version="1.0.0",
+    description="Agricultural Cooperative SME Assistant — Telegram + CrewAI + Dashboard",
+    version="2.0.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -43,7 +59,7 @@ app.include_router(analysis.router, prefix="/api")
 async def root():
     return {
         "service": "KOBI Pocket Assistant API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "status": "operational",
         "docs": "/docs",
     }

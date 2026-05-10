@@ -12,11 +12,23 @@ import {
   Loader2,
   Pencil,
   X,
+  Bot,
+  TrendingDown,
+  ShoppingCart,
 } from "lucide-react";
 import { clsx } from "clsx";
 import type { PendingApproval } from "@/app/page";
 
 // ── Types ──────────────────────────────────────────────────────────────────
+
+interface AgentAnalysis {
+  stock_ratio?: number;
+  deficit?: number;
+  urgency_level?: "HIGH" | "MEDIUM" | "LOW";
+  urgency_label?: string;
+  recommended_order_qty?: number;
+  reasoning?: string;
+}
 
 interface EmailPayload {
   product_name?: string;
@@ -27,6 +39,8 @@ interface EmailPayload {
   email_subject?: string;
   email_body?: string;
   recipient?: string;
+  agent_analysis?: AgentAnalysis;
+  generated_by?: string;
   // legacy fields from original seed data
   subject?: string;
   body?: string;
@@ -43,6 +57,59 @@ interface Props {
   loading: boolean;
   onApprove: (id: number, approval: PendingApproval, overrides: EmailOverrides) => Promise<void>;
   onReject: (id: number, approval: PendingApproval) => Promise<void>;
+}
+
+// ── Agent Insight Bar ──────────────────────────────────────────────────────
+
+const URGENCY_STYLES = {
+  HIGH:   "text-red-400 bg-red-500/10 border-red-500/25",
+  MEDIUM: "text-yellow-400 bg-yellow-500/10 border-yellow-500/25",
+  LOW:    "text-brand-400 bg-brand-500/10 border-brand-500/25",
+} as const;
+
+function AgentInsightBar({ analysis }: { analysis: AgentAnalysis }) {
+  const level = analysis.urgency_level ?? "MEDIUM";
+  const colorClass = URGENCY_STYLES[level];
+
+  return (
+    <div className="mx-4 mb-1 rounded-lg bg-[#0a1209] border border-[rgba(34,197,94,0.07)] px-3 py-2 space-y-1.5">
+      {/* Top row: urgency badge + recommended qty + fill % */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="flex items-center gap-1">
+          <Bot size={10} className="text-slate-500" />
+          <span className="text-[9px] text-slate-600 font-medium uppercase tracking-wider">AI Crew</span>
+        </span>
+
+        <span className={clsx(
+          "text-[10px] font-bold px-1.5 py-0.5 rounded-full border",
+          colorClass
+        )}>
+          {analysis.urgency_label ?? level}
+        </span>
+
+        {analysis.recommended_order_qty !== undefined && (
+          <span className="flex items-center gap-1 text-[10px] text-slate-400">
+            <ShoppingCart size={10} className="text-slate-500" />
+            Önerilen: <strong className="text-white ml-0.5">{analysis.recommended_order_qty}</strong>
+          </span>
+        )}
+
+        {analysis.stock_ratio !== undefined && (
+          <span className="flex items-center gap-1 text-[10px] text-slate-600 font-mono ml-auto">
+            <TrendingDown size={10} />
+            {Math.round(analysis.stock_ratio * 100)}% dolu
+          </span>
+        )}
+      </div>
+
+      {/* Reasoning */}
+      {analysis.reasoning && (
+        <p className="text-[10px] text-slate-500 leading-relaxed line-clamp-2">
+          {analysis.reasoning}
+        </p>
+      )}
+    </div>
+  );
 }
 
 // ── Single approval card ───────────────────────────────────────────────────
@@ -130,6 +197,9 @@ function ApprovalCard({
           </p>
         </div>
       </div>
+
+      {/* Agent insight — only when CrewAI generated this approval */}
+      {p.agent_analysis && <AgentInsightBar analysis={p.agent_analysis} />}
 
       {/* Expandable section */}
       <div className="px-4 pb-3">
@@ -260,14 +330,24 @@ function ApprovalCard({
 // ── Panel ──────────────────────────────────────────────────────────────────
 
 export default function ApprovalPanel({ approvals, loading, onApprove, onReject }: Props) {
+  const hasCrewResults = approvals.some(
+    (a) => (a.payload as EmailPayload)?.generated_by === "crewai_v1"
+  );
+
   return (
     <div className="card-glow rounded-xl bg-[#111a14] border border-[rgba(34,197,94,0.08)] overflow-hidden h-fit">
 
       {/* Header */}
       <div className="px-5 py-4 border-b border-[rgba(34,197,94,0.08)] flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Mail size={14} className="text-brand-500" />
-          <h2 className="text-white font-semibold text-sm">Onay Bekleyenler</h2>
+          {hasCrewResults ? (
+            <Bot size={14} className="text-brand-500" />
+          ) : (
+            <Mail size={14} className="text-brand-500" />
+          )}
+          <h2 className="text-white font-semibold text-sm">
+            {hasCrewResults ? "AI Crew Analizi" : "Onay Bekleyenler"}
+          </h2>
         </div>
 
         {approvals.length > 0 && (
