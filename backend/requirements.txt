@@ -13,3 +13,4 @@ crewai[google-genai]
 litellm
 starlette
 python-telegram-bot
+twilio

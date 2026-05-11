@@ -1,29 +1,194 @@
 """
 Webhook router — two surface areas:
 
-  POST /api/webhook/message      ← Phase 2: AI-powered, JSON body, testable via Swagger
-  POST /api/webhook/whatsapp     ← Phase 3 placeholder (Twilio form-encoded signature)
+  POST /api/webhook/message      ← AI-powered, JSON body, testable via Swagger
+  POST /api/webhook/whatsapp     ← Twilio WhatsApp (form-encoded, TwiML response)
+
+WhatsApp flow (the core demo):
+  1. User sends invoice photo or text via WhatsApp
+  2. Twilio POSTs here with form data + MediaUrl
+  3. We download the image (Twilio auth) → Gemini Vision parses the invoice
+  4. Stock movement recorded in DB
+  5. Rich TwiML reply: new total, threshold status, warning if critical
+  6. If stock just crossed below threshold → background task:
+       a. AI Crew runs (~30s) and creates ActionApproval email drafts
+       b. Outbound WhatsApp sent: "Email draft ready, go approve it"
+  7. Dashboard auto-refreshes and shows approval panel with the email
 """
 
 import base64
+import json
 import logging
+import os
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import Response as HTTPResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+import crud as _crud
 import models, schemas
-from database import get_db
+from database import SessionLocal, get_db
 from services import ai_service
 from services.ai_service import AIParsingError, APIKeyMissingError
 from services.product_service import find_product as _find_product
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(tags=["Webhook"])
 
+_TWILIO_AUTH_TOKEN    = os.getenv("TWILIO_AUTH_TOKEN", "")
+_TWILIO_ACCOUNT_SID   = os.getenv("TWILIO_ACCOUNT_SID", "")
+_TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "")
+_DASHBOARD_URL        = os.getenv("DASHBOARD_URL", "http://localhost:3000")
 
-# ── POST /api/webhook/message — Phase 2 AI endpoint ───────────────────────
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+def _twiml(message: str) -> HTTPResponse:
+    """Wrap a plain-text message in a TwiML MessagingResponse."""
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        f"<Message>{message}</Message>"
+        "</Response>"
+    )
+    return HTTPResponse(content=body, media_type="text/xml")
+
+
+def _fmt(n: float) -> str:
+    """Format a number without trailing .0 for clean Turkish display."""
+    return f"{int(n):,}".replace(",", ".") if n == int(n) else f"{n:.1f}"
+
+
+def _build_stock_reply(
+    product_name: str,
+    unit: str,
+    quantity: float,
+    action: str,
+    reason: str,
+    new_stock: float,
+    threshold: float,
+) -> str:
+    """Build the rich WhatsApp confirmation message shown after a stock update."""
+    verb = "stoka eklendi ✅" if action == "in" else "stoktan düşüldü 📤"
+
+    lines = [
+        f"{_fmt(quantity)} {unit} {product_name} {verb}",
+        "─" * 26,
+        f"📦 Yeni stok: {_fmt(new_stock)} {unit}",
+        f"📊 Eşik:      {_fmt(threshold)} {unit}",
+    ]
+
+    if threshold > 0:
+        ratio = new_stock / threshold
+        if ratio < 0.3:
+            lines.append("🔴 KRİTİK — acil sipariş gerekiyor!")
+            lines.append("   AI analiz başlatılıyor...")
+        elif new_stock < threshold:
+            lines.append(f"⚠️  Eşiğin altında (%{int(ratio * 100)}) — yakında sipariş verin")
+        else:
+            lines.append(f"✅ Yeterli (%{int(ratio * 100)})")
+
+    if reason and reason.lower() not in {
+        "irsaliye okundu", "giriş yapıldı", "çıkış yapıldı", "manuel giriş",
+    }:
+        lines.append(f"📝 {reason}")
+
+    return "\n".join(lines)
+
+
+def _send_outbound_whatsapp(to: str, message: str) -> None:
+    """Send a proactive WhatsApp message via Twilio REST client."""
+    if not (_TWILIO_ACCOUNT_SID and _TWILIO_AUTH_TOKEN and _TWILIO_WHATSAPP_FROM):
+        logger.warning("Outbound WhatsApp skipped — TWILIO_WHATSAPP_FROM / credentials not set")
+        return
+    try:
+        from twilio.rest import Client
+        Client(_TWILIO_ACCOUNT_SID, _TWILIO_AUTH_TOKEN).messages.create(
+            from_=f"whatsapp:{_TWILIO_WHATSAPP_FROM}",
+            to=to,
+            body=message,
+        )
+        logger.info("Outbound WhatsApp sent to %s", to)
+    except Exception as exc:
+        logger.error("Outbound WhatsApp failed: %s", exc)
+
+
+# ── Background task: auto-run AI Crew when stock goes critical ─────────────
+
+def _auto_crew_and_notify(sender: str, product_name: str) -> None:
+    """
+    Triggered in the background when a WhatsApp stock update pushes a product
+    below its threshold. Runs the full AI Crew pipeline then notifies the sender.
+
+    Uses its own DB session — safe to run after the HTTP response is sent.
+    """
+    from services.crew_service import run_crew
+
+    db = SessionLocal()
+    try:
+        # Idempotency: collect product IDs that already have a pending approval
+        already_pending: set[int] = set()
+        for approval in _crud.get_pending_approvals(db):
+            if approval.type != "supply_email":
+                continue
+            try:
+                pid = json.loads(approval.payload).get("product_id")
+                if pid is not None:
+                    already_pending.add(int(pid))
+            except Exception:
+                pass
+
+        logger.info("Auto-crew starting for critical stock after WhatsApp update (%s)", product_name)
+        items = run_crew(db)
+
+        created = 0
+        for item in items:
+            pid = item.get("product_id")
+            if pid is not None and int(pid) in already_pending:
+                logger.info("Skipping product_id=%s — approval already pending", pid)
+                continue
+            _crud.create_action_approval(
+                db,
+                schemas.ActionApprovalCreate(type="supply_email", payload=item),
+            )
+            created += 1
+
+        if created > 0:
+            _crud.create_notification(
+                db,
+                title=f"🤖 AI Crew: {created} tedarik e-postası hazırlandı",
+                body=f"{product_name} stoku kritik. WhatsApp üzerinden tetiklendi.",
+                type="ai_analysis",
+            )
+            db.commit()
+
+            _send_outbound_whatsapp(
+                to=sender,
+                message=(
+                    f"🤖 AI Tedarik Analizi Tamamlandı!\n"
+                    f"{'─' * 28}\n"
+                    f"📦 {product_name} stoğu kritik seviyede.\n"
+                    f"✉️  {created} tedarikçi e-posta taslağı hazırlandı.\n\n"
+                    f"▶️ Dashboard'dan onaylayıp gönderin:\n{_DASHBOARD_URL}"
+                ),
+            )
+        else:
+            db.commit()
+            logger.info("Auto-crew: no new approvals (all already pending)")
+
+    except Exception as exc:
+        logger.error("Auto-crew background task failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+# ── POST /api/webhook/message — direct AI endpoint (Swagger testable) ──────
 
 @router.post("/webhook/message", response_model=schemas.WebhookMessageResponse)
 async def receive_message(
@@ -32,16 +197,9 @@ async def receive_message(
 ):
     """
     AI-powered stock update via text or invoice photo.
-
-    Test with Swagger UI (/docs) or curl:
+    Test via Swagger UI (/docs):
       {"text": "250 kg buğday teslim alındı"}
       {"image_base64": "<base64>", "mime_type": "image/jpeg"}
-
-    Workflow:
-      1. Send text/image to Gemini 2.5 Pro → get ParsedStockData
-      2. Fuzzy-match product_name against DB
-      3. Append StockMovement (never update existing rows)
-      4. Return Turkish confirmation message
     """
     if not payload.text and not payload.image_base64:
         raise HTTPException(
@@ -49,7 +207,6 @@ async def receive_message(
             detail="'text' veya 'image_base64' alanlarından biri zorunludur.",
         )
 
-    # ── Step 1: AI parsing ─────────────────────────────────────────────────
     try:
         if payload.image_base64:
             try:
@@ -59,20 +216,14 @@ async def receive_message(
             parsed = ai_service.parse_image(image_bytes, payload.mime_type)
         else:
             parsed = ai_service.parse_text(payload.text)  # type: ignore[arg-type]
-
     except APIKeyMissingError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except AIParsingError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    logger.info(
-        "AI parsed: product=%s qty=%s action=%s",
-        parsed.product_name, parsed.quantity, parsed.action,
-    )
+    logger.info("AI parsed: product=%s qty=%s action=%s", parsed.product_name, parsed.quantity, parsed.action)
 
-    # ── Step 2: Product match ──────────────────────────────────────────────
     product = _find_product(db, parsed.product_name)
-
     if not product:
         return schemas.WebhookMessageResponse(
             status="warning",
@@ -83,23 +234,16 @@ async def receive_message(
             parsed=parsed.model_dump(),
         )
 
-    # ── Step 3: Append StockMovement ──────────────────────────────────────
     signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
     source = "invoice_photo" if payload.image_base64 else "whatsapp_text"
-
     movement = models.StockMovement(
-        product_id=product.id,
-        quantity=signed_qty,
-        type=parsed.action,
-        source=source,
-        notes=parsed.reason,
+        product_id=product.id, quantity=signed_qty,
+        type=parsed.action, source=source, notes=parsed.reason,
     )
     db.add(movement)
     db.commit()
     db.refresh(movement)
 
-    # ── Step 4: Create notification ──────────────────────────────────────
-    import crud as _crud
     verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
     _crud.create_notification(
         db,
@@ -117,28 +261,195 @@ async def receive_message(
     )
 
 
-# ── POST /api/webhook/whatsapp — Phase 3 Twilio placeholder ───────────────
+# ── POST /api/webhook/whatsapp — Twilio WhatsApp ──────────────────────────
 
-@router.post("/webhook/whatsapp", response_model=schemas.WebhookResponse)
+@router.post("/webhook/whatsapp")
 async def receive_whatsapp(
-    From: str = "",
-    Body: str = "",
-    MediaUrl0: str = None,
-    MediaContentType0: str = None,
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """
-    Twilio webhook (form-encoded). Phase 3: wire real Twilio signature validation
-    and forward to receive_message() above.
+    Twilio WhatsApp webhook (form-encoded POST).
+
+    Validates X-Twilio-Signature when TWILIO_AUTH_TOKEN is set.
+    Supports text messages and image attachments (invoice photos).
+    Returns TwiML so the reply goes back to the WhatsApp sender.
+
+    When the update pushes stock below threshold, an AI Crew analysis
+    runs in the background and the sender gets a follow-up WhatsApp
+    when the supplier email draft is ready.
     """
-    if MediaUrl0:
-        return schemas.WebhookResponse(
-            status="queued",
-            message="Fotoğraf alındı, AI işleme başlayacak.",
+    form = dict(await request.form())
+
+    # ── Twilio signature validation ────────────────────────────────────────
+    if _TWILIO_AUTH_TOKEN:
+        try:
+            from twilio.request_validator import RequestValidator
+            validator = RequestValidator(_TWILIO_AUTH_TOKEN)
+            signature = request.headers.get("X-Twilio-Signature", "")
+            if not validator.validate(str(request.url), form, signature):
+                logger.warning("Invalid Twilio signature — request rejected")
+                raise HTTPException(status_code=403, detail="Geçersiz Twilio imzası.")
+        except ImportError:
+            logger.warning("twilio package not installed — skipping signature validation")
+    else:
+        logger.debug("TWILIO_AUTH_TOKEN not set — validation skipped (dev/ngrok mode)")
+
+    From: str = form.get("From", "")
+    Body: str = form.get("Body", "").strip()
+    MediaUrl0: str | None = form.get("MediaUrl0")
+    MediaContentType0: str | None = form.get("MediaContentType0")
+
+    logger.info("WhatsApp from=%s body=%r has_media=%s", From, Body[:60], bool(MediaUrl0))
+
+    # ── Photo: multi-item parse ────────────────────────────────────────────
+    if MediaUrl0 and MediaContentType0 and MediaContentType0.startswith("image/"):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                auth = (
+                    (_TWILIO_ACCOUNT_SID, _TWILIO_AUTH_TOKEN)
+                    if _TWILIO_ACCOUNT_SID and _TWILIO_AUTH_TOKEN
+                    else None
+                )
+                resp = await client.get(MediaUrl0, auth=auth, follow_redirects=True)
+                resp.raise_for_status()
+                image_bytes = resp.content
+        except httpx.HTTPError as exc:
+            logger.error("Media download failed: %s", exc)
+            return _twiml("❌ Fotoğraf indirilemedi. Lütfen tekrar gönderin.")
+
+        try:
+            parsed_list = ai_service.parse_image_multi(image_bytes, MediaContentType0)
+        except APIKeyMissingError:
+            return _twiml("❌ Sistem yapılandırma hatası. Yöneticiye bildirin.")
+        except AIParsingError:
+            return _twiml(
+                "❌ Fotoğraf okunamadı.\n\n"
+                "💡 İpuçları:\n"
+                "• Belgeyi düz, aydınlık bir ortamda çekin\n"
+                "• Tüm metin görünür olsun\n"
+                "• Veya miktarı yazarak gönderin:\n"
+                "  '2 ton buğday teslim alındı'"
+            )
+
+        reply_lines = [f"📋 {len(parsed_list)} ürün okundu:\n"]
+        for parsed in parsed_list:
+            product = _find_product(db, parsed.product_name)
+            if not product:
+                reply_lines.append(f"⚠️ {parsed.product_name} — kayıtlı değil, atlandı")
+                continue
+
+            signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
+            db.add(models.StockMovement(
+                product_id=product.id,
+                quantity=signed_qty,
+                type=parsed.action,
+                source="whatsapp_photo",
+                notes=parsed.reason,
+            ))
+            db.commit()
+
+            new_stock: float = (
+                db.query(func.sum(models.StockMovement.quantity))
+                .filter(models.StockMovement.product_id == product.id)
+                .scalar() or 0.0
+            )
+
+            verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
+            _crud.create_notification(
+                db,
+                title=f"{verb_tr} (WhatsApp foto): {_fmt(parsed.quantity)} {product.unit} {product.name}",
+                body=f"Gönderen: {From}",
+                type="stock_update",
+            )
+
+            if new_stock < float(product.threshold):
+                background_tasks.add_task(_auto_crew_and_notify, From, product.name)
+
+            verb = "✅ girdi" if parsed.action == "in" else "📤 çıktı"
+            status = ""
+            if float(product.threshold) > 0:
+                ratio = new_stock / float(product.threshold)
+                if ratio < 0.3:
+                    status = " 🔴 KRİTİK"
+                elif new_stock < float(product.threshold):
+                    status = " ⚠️ eşik altı"
+            reply_lines.append(
+                f"{verb} {_fmt(parsed.quantity)} {product.unit} {product.name}"
+                f" → {_fmt(new_stock)} {product.unit}{status}"
+            )
+
+        return _twiml("\n".join(reply_lines))
+
+    # ── Text: single-item parse ────────────────────────────────────────────
+    if not Body:
+        return _twiml(
+            "Merhaba! 👋\n"
+            "Stok güncellemek için:\n"
+            "• Metin: '2 ton buğday teslim alındı'\n"
+            "• Fotoğraf: irsaliye veya fiş görseli gönderin"
         )
-    if Body.strip():
-        return schemas.WebhookResponse(
-            status="received",
-            message=f"Mesaj alındı: '{Body[:80]}'. İşleniyor.",
+
+    try:
+        parsed = ai_service.parse_text(Body)
+    except APIKeyMissingError:
+        return _twiml("❌ Sistem yapılandırma hatası. Yöneticiye bildirin.")
+    except AIParsingError:
+        return _twiml(
+            "❌ Mesaj anlaşılamadı.\n"
+            "Miktar, birim ve ürün adını doğal Türkçe ile yazın:\n"
+            "• '2 ton buğday teslim alındı'\n"
+            "• '500 litre mazot kullanıldı'\n"
+            "• '50 adet çuval verildi'"
         )
-    return schemas.WebhookResponse(status="ignored", message="Boş mesaj.")
+
+    # ── Match product in DB ────────────────────────────────────────────────
+    product = _find_product(db, parsed.product_name)
+    if not product:
+        all_products = db.query(models.Product).all()
+        names = ", ".join(p.name for p in all_products[:5]) if all_products else "—"
+        return _twiml(
+            f"⚠️ '{parsed.product_name}' bulunamadı.\n"
+            f"Kayıtlı ürünler: {names}\n\n"
+            "Tam ürün adını yazarak tekrar deneyin."
+        )
+
+    # ── Record the stock movement ──────────────────────────────────────────
+    signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
+    db.add(models.StockMovement(
+        product_id=product.id,
+        quantity=signed_qty,
+        type=parsed.action,
+        source="whatsapp_text",
+        notes=parsed.reason,
+    ))
+    db.commit()
+
+    new_stock = (
+        db.query(func.sum(models.StockMovement.quantity))
+        .filter(models.StockMovement.product_id == product.id)
+        .scalar() or 0.0
+    )
+
+    verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
+    _crud.create_notification(
+        db,
+        title=f"{verb_tr} (WhatsApp): {_fmt(parsed.quantity)} {product.unit} {product.name}",
+        body=f"Gönderen: {From}" + (f" | Not: {parsed.reason}" if parsed.reason else ""),
+        type="stock_update",
+    )
+
+    if new_stock < float(product.threshold):
+        background_tasks.add_task(_auto_crew_and_notify, From, product.name)
+        logger.info("Stock critical for '%s' — AI Crew queued", product.name)
+
+    return _twiml(_build_stock_reply(
+        product_name=product.name,
+        unit=product.unit,
+        quantity=parsed.quantity,
+        action=parsed.action,
+        reason=parsed.reason or "",
+        new_stock=new_stock,
+        threshold=float(product.threshold),
+    ))

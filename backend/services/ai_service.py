@@ -70,6 +70,8 @@ Fotoğraf Kuralları:
 - Birimi reason alanına ekle (örn. 'İrsaliye Okundu — 250 kg')
 - Eğer belge bir teslimat/alım fişiyse → action = 'in'
 - Eğer belge bir satış/çıkış fişiyse → action = 'out'
+- Belgede birden fazla ürün varsa: en büyük miktarlı veya ilk satırdaki ürünü seç
+- MUTLAKA tek bir ürün için JSON döndür — dizi değil, tek nesne
 
 product_name örnekleri: 'Buğday', 'Arpa', 'Mazot', 'Gübre', 'Ayçiçeği Tohumu'
 """
@@ -85,9 +87,26 @@ def _get_model() -> genai.GenerativeModel:
     return genai.GenerativeModel(
         model_name=GEMINI_MODEL,
         generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",   # Force JSON-only output
-            temperature=0.1,                          # Low temp = deterministic extraction
+            response_mime_type="application/json",
+            temperature=0.1,
             max_output_tokens=512,
+        ),
+        system_instruction=_SYSTEM_PROMPT,
+    )
+
+
+def _get_image_model() -> genai.GenerativeModel:
+    """Vision model — no response_mime_type; multimodal + JSON mode is unreliable."""
+    if not _API_KEY:
+        raise APIKeyMissingError(
+            "GEMINI_API_KEY ortam değişkeni ayarlanmamış. "
+            "Lütfen backend/.env dosyasına ekleyin."
+        )
+    return genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        generation_config=genai.GenerationConfig(
+            temperature=0.1,
+            max_output_tokens=2048,
         ),
         system_instruction=_SYSTEM_PROMPT,
     )
@@ -112,23 +131,18 @@ def parse_text(text: str) -> ParsedStockData:
 
 
 def parse_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> ParsedStockData:
-    """
-    Parse an invoice/receipt photo using Gemini Vision.
-    Accepts raw bytes from the webhook (decoded from base64 by the caller).
-    """
+    """Single-item image parse (used by the JSON /webhook/message endpoint)."""
     try:
-        model = _get_model()
-        prompt = "Bu irsaliye/fiş/makbuz fotoğrafından stok hareketi bilgisini çıkar:"
-
-        # Prefer PIL for cleaner image handling; fall back to inline dict
-        try:
-            import PIL.Image
-            img = PIL.Image.open(io.BytesIO(image_bytes))
-            contents = [prompt, img]
-        except ImportError:
-            contents = [prompt, {"mime_type": mime_type, "data": image_bytes}]
-
-        response = model.generate_content(contents)
+        model = _get_image_model()
+        prompt = (
+            "Bu irsaliye/fiş/makbuz/fatura fotoğrafından stok hareketi bilgisini çıkar. "
+            "Birden fazla ürün varsa yalnızca ilk satırdakini al. "
+            "Tek bir JSON nesnesi döndür — dizi değil."
+        )
+        image_part = {"mime_type": mime_type, "data": image_bytes}
+        response = model.generate_content([prompt, image_part])
+        if not response.text:
+            raise AIParsingError("Gemini boş yanıt döndürdü — görsel okunamadı.")
         return _parse_response(response.text)
     except AIParsingError:
         raise
@@ -136,23 +150,92 @@ def parse_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> ParsedStoc
         logger.error("Gemini vision parse error: %s", exc)
         raise AIParsingError(f"Fotoğraf ayrıştırılamadı: {exc}") from exc
 
+
+def parse_image_multi(image_bytes: bytes, mime_type: str = "image/jpeg") -> list[ParsedStockData]:
+    """
+    Parse ALL line items from an invoice photo.
+    Returns one ParsedStockData per product row found.
+    """
+    try:
+        model = _get_image_model()
+        prompt = (
+            "Bu irsaliye/fiş/makbuz/fatura fotoğrafındaki HER ürün satırı için stok hareketi bilgisini çıkar. "
+            "JSON dizisi (array) olarak döndür — her satır için bir nesne:\n"
+            '[{"product_name":"...","quantity":...,"action":"in","reason":"..."}]'
+        )
+        image_part = {"mime_type": mime_type, "data": image_bytes}
+        response = model.generate_content([prompt, image_part])
+        try:
+            raw_text = response.text
+        except Exception as e:
+            logger.error("Gemini response.text access failed (likely safety block): %s", e)
+            raise AIParsingError("Gemini görseli güvenlik filtresiyle reddetti.") from e
+        logger.info("Gemini multi-item raw response: %r", raw_text[:500] if raw_text else None)
+        if not raw_text:
+            raise AIParsingError("Gemini boş yanıt döndürdü — görsel okunamadı.")
+        return _parse_multi_response(raw_text)
+    except AIParsingError:
+        raise
+    except Exception as exc:
+        logger.error("Gemini multi-item vision parse error: %s", exc)
+        raise AIParsingError(f"Fotoğraf ayrıştırılamadı: {exc}") from exc
+
 # ── Response parser ────────────────────────────────────────────────────────
+
+def _extract_first_json_object(text: str) -> str | None:
+    """Extract the first complete, balanced {...} object from text."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
 
 def _parse_response(raw: str) -> ParsedStockData:
     """Validate and coerce Gemini's JSON output into ParsedStockData."""
     cleaned = raw.strip()
 
-    # Strip markdown fences — shouldn't appear with response_mime_type=json, but be safe
+    # Strip markdown fences
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
         cleaned = "\n".join(lines[1:-1]).strip()
 
+    # Try direct parse; fall back to extracting the first balanced {...} block.
+    # Using rfind("}") is wrong for multi-item responses — it grabs across multiple objects.
     try:
         data: dict = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise AIParsingError(
-            f"Gemini geçersiz JSON döndürdü: {exc}\nHam çıktı: {cleaned[:300]}"
-        ) from exc
+    except json.JSONDecodeError:
+        fragment = _extract_first_json_object(cleaned)
+        if not fragment:
+            raise AIParsingError(
+                f"Gemini JSON bloğu bulunamadı.\nHam çıktı: {cleaned[:300]}"
+            )
+        try:
+            data = json.loads(fragment)
+        except json.JSONDecodeError as exc:
+            raise AIParsingError(
+                f"Gemini geçersiz JSON döndürdü: {exc}\nHam çıktı: {cleaned[:300]}"
+            ) from exc
 
     # Normalize and validate fields
     action = str(data.get("action", "in")).lower().strip()
@@ -166,6 +249,52 @@ def _parse_response(raw: str) -> ParsedStockData:
         return ParsedStockData(**data)
     except Exception as exc:
         raise AIParsingError(f"Çıktı doğrulaması başarısız: {exc}") from exc
+
+
+def _parse_multi_response(raw: str) -> list[ParsedStockData]:
+    """Parse Gemini's JSON array response into a list of ParsedStockData."""
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        cleaned = "\n".join(lines[1:-1]).strip()
+
+    # Try as a JSON array; if that fails, extract every {...} object from the text
+    try:
+        items = json.loads(cleaned)
+        if isinstance(items, dict):
+            items = [items]
+    except json.JSONDecodeError:
+        items = []
+        remaining = cleaned
+        while True:
+            fragment = _extract_first_json_object(remaining)
+            if not fragment:
+                break
+            try:
+                items.append(json.loads(fragment))
+            except json.JSONDecodeError:
+                pass
+            idx = remaining.find(fragment) + len(fragment)
+            remaining = remaining[idx:]
+
+    if not items:
+        raise AIParsingError("Fotoğrafta hiç ürün bulunamadı.")
+
+    result = []
+    for item in items:
+        try:
+            action = str(item.get("action", "in")).lower().strip()
+            item["action"] = action if action in ("in", "out") else "in"
+            item["quantity"] = abs(float(item.get("quantity", 0) or 0))
+            if item["quantity"] == 0:
+                continue
+            result.append(ParsedStockData(**item))
+        except Exception:
+            continue
+
+    if not result:
+        raise AIParsingError("Geçerli stok hareketi bulunamadı.")
+    return result
 
 
 # ── Phase 3: Email draft generator ────────────────────────────────────────

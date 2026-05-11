@@ -313,6 +313,50 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         db.close()
 
 
+async def _process_image_bytes(
+    update: Update, db, image_bytes: bytes, mime_type: str = "image/jpeg"
+) -> None:
+    """Shared logic for photo and document image handlers."""
+    await update.message.reply_text("🔍 Görsel analiz ediliyor...")
+    parsed = ai_service.parse_image(image_bytes, mime_type)
+    product = find_product(db, parsed.product_name)
+    if not product:
+        await update.message.reply_text(
+            f"📄 İrsaliye okundu — ama *'{parsed.product_name}'* bulunamadı.\n"
+            "Lütfen ürünü Stok Yönetimi sayfasından ekleyin.",
+            parse_mode="Markdown",
+        )
+        return
+
+    signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
+    movement = models.StockMovement(
+        product_id=product.id,
+        quantity=signed_qty,
+        type=parsed.action,
+        source="telegram_photo",
+        notes=parsed.reason,
+    )
+    db.add(movement)
+
+    import crud as _crud
+    verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
+    _crud.create_notification(
+        db,
+        title=f"{verb_tr} (Telegram Fotoğraf): {parsed.quantity} {product.unit} {product.name}",
+        body=parsed.reason,
+        type="stock_update",
+    )
+    db.commit()
+
+    verb = "stoka eklendi ✅" if parsed.action == "in" else "stoktan düşüldü 📤"
+    await update.message.reply_text(
+        f"📄 İrsaliye okundu!\n"
+        f"*{parsed.quantity} {product.unit} {product.name}* {verb}\n"
+        f"_{parsed.reason}_",
+        parse_mode="Markdown",
+    )
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _register_chat(update)
     db = SessionLocal()
@@ -320,38 +364,36 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         photo = update.message.photo[-1]
         tg_file = await context.bot.get_file(photo.file_id)
         image_bytes = bytes(await tg_file.download_as_bytearray())
-
-        parsed = ai_service.parse_image(image_bytes, "image/jpeg")
-        product = find_product(db, parsed.product_name)
-        if not product:
-            await update.message.reply_text(
-                f"📄 İrsaliye okundu — ama *'{parsed.product_name}'* bulunamadı.\n"
-                "Lütfen ürünü Stok Yönetimi sayfasından ekleyin.",
-                parse_mode="Markdown",
-            )
-            return
-
-        signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
-        db.add(models.StockMovement(
-            product_id=product.id,
-            quantity=signed_qty,
-            type=parsed.action,
-            source="telegram_photo",
-            notes=parsed.reason,
-        ))
-        db.commit()
-
-        await update.message.reply_text(
-            f"📄 İrsaliye okundu!\n"
-            f"*{parsed.quantity} {product.unit} {product.name}* stoka işlendi ✅\n"
-            f"_{parsed.reason}_",
-            parse_mode="Markdown",
-        )
+        await _process_image_bytes(update, db, image_bytes, "image/jpeg")
     except ai_service.AIParsingError as exc:
         await update.message.reply_text(f"❌ Fotoğraf okunamadı: {exc}")
     except Exception as exc:
         logger.error("Telegram photo handler error: %s", exc)
         await update.message.reply_text("❌ Fotoğraf işlenemedi, tekrar deneyin.")
+    finally:
+        db.close()
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle images sent as files (uncompressed) via Telegram."""
+    _register_chat(update)
+    doc = update.message.document
+    if not doc or not doc.mime_type or not doc.mime_type.startswith("image/"):
+        await update.message.reply_text(
+            "📎 Sadece görsel dosyalar (jpg, png, webp) işlenebilir."
+        )
+        return
+
+    db = SessionLocal()
+    try:
+        tg_file = await context.bot.get_file(doc.file_id)
+        image_bytes = bytes(await tg_file.download_as_bytearray())
+        await _process_image_bytes(update, db, image_bytes, doc.mime_type)
+    except ai_service.AIParsingError as exc:
+        await update.message.reply_text(f"❌ Dosya okunamadı: {exc}")
+    except Exception as exc:
+        logger.error("Telegram document handler error: %s", exc)
+        await update.message.reply_text("❌ Dosya işlenemedi, tekrar deneyin.")
     finally:
         db.close()
 
@@ -371,5 +413,6 @@ def build_application() -> Application | None:
     app.add_handler(CommandHandler("stok", handle_status))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.IMAGE, handle_document))
     logger.info("Telegram bot configured with token ...%s", _TOKEN[-6:])
     return app

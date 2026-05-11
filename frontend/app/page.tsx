@@ -5,10 +5,11 @@ import { toast } from "sonner";
 import KpiCard from "@/components/ui/KpiCard";
 import StockTable from "@/components/ui/StockTable";
 import ApprovalPanel, { type EmailOverrides } from "@/components/ui/ApprovalPanel";
+import { DaysToEmptyChart, WeeklyFlowChart, type DailyProduct } from "@/components/ui/StockCharts";
 import {
   Boxes, AlertTriangle, Clock, Activity,
   Wifi, WifiOff, Sparkles, Loader2, RefreshCw,
-  TrendingDown, PackageCheck, BarChart3,
+  TrendingDown, PackageCheck, BarChart3, CalendarClock,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -64,48 +65,6 @@ interface DashboardData {
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const KPI_ICONS = [Boxes, AlertTriangle, Clock, Activity];
 
-// ── Analytics mini card ────────────────────────────────────────────────────
-
-function TrendCard({ item }: { item: TrendItem }) {
-  const ratio = item.stock_ratio;
-  const urgent = ratio < 0.3;
-  const warning = ratio >= 0.3 && ratio < 0.6;
-
-  return (
-    <div className={`rounded-lg border p-3 flex items-center gap-3 ${
-      urgent ? "bg-red-50 border-red-200" :
-      warning ? "bg-amber-50 border-amber-200" :
-      "bg-white border-slate-200"
-    }`}>
-      <div className={`w-1 self-stretch rounded-full flex-shrink-0 ${
-        urgent ? "bg-red-500" : warning ? "bg-amber-400" : "bg-brand-500"
-      }`} />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-slate-800 truncate">{item.product_name}</p>
-        <p className="text-xs text-slate-500 mt-0.5">
-          {item.daily_avg_consumption > 0
-            ? `${item.daily_avg_consumption.toFixed(1)} ${item.unit}/gün`
-            : "Tüketim verisi yok"
-          }
-        </p>
-      </div>
-      <div className="text-right flex-shrink-0">
-        {item.days_to_empty != null ? (
-          <p className={`text-sm font-bold ${
-            item.days_to_empty <= 3 ? "text-red-600" :
-            item.days_to_empty <= 7 ? "text-amber-600" : "text-slate-700"
-          }`}>
-            {Math.round(item.days_to_empty)} gün
-          </p>
-        ) : (
-          <p className="text-sm font-medium text-slate-400">—</p>
-        )}
-        <p className="text-[10px] text-slate-400">tahmini süre</p>
-      </div>
-    </div>
-  );
-}
-
 // ── Skeleton ───────────────────────────────────────────────────────────────
 
 function KpiSkeleton() {
@@ -123,6 +82,7 @@ function KpiSkeleton() {
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [trends, setTrends] = useState<TrendItem[]>([]);
+  const [history, setHistory] = useState<DailyProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -130,14 +90,16 @@ export default function DashboardPage() {
 
   const fetchDashboard = useCallback(async () => {
     try {
-      const [dashRes, trendRes] = await Promise.all([
+      const [dashRes, trendRes, histRes] = await Promise.all([
         fetch(`${API}/api/dashboard`),
         fetch(`${API}/api/analytics/trends`),
+        fetch(`${API}/api/analytics/daily-history`),
       ]);
       if (!dashRes.ok) throw new Error("API error");
       const json: DashboardData = await dashRes.json();
       setData(json);
       if (trendRes.ok) setTrends(await trendRes.json());
+      if (histRes.ok) setHistory(await histRes.json());
       setLastUpdated(new Date());
       setApiError(false);
     } catch {
@@ -149,7 +111,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchDashboard();
-    const interval = setInterval(fetchDashboard, 30_000);
+    const interval = setInterval(fetchDashboard, 10_000);
     return () => clearInterval(interval);
   }, [fetchDashboard]);
 
@@ -224,7 +186,6 @@ export default function DashboardPage() {
     { label: "Bugünkü Hareket", value: "--" },
   ];
   const kpis = data?.kpis ?? fallbackKpis;
-  const criticalTrends = trends.filter(t => t.is_critical || t.stock_ratio < 0.6);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -300,21 +261,42 @@ export default function DashboardPage() {
           <div className="xl:col-span-2 space-y-6">
             <StockTable stocks={data?.stock_levels ?? []} loading={loading} />
 
-            {/* Analytics Trends */}
-            {!loading && criticalTrends.length > 0 && (
-              <div className="card overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <BarChart3 size={16} className="text-brand-600" />
-                    <h2 className="section-title">7 Günlük Tüketim Tahmini</h2>
+            {/* Charts */}
+            {!loading && trends.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+                {/* Days-to-empty */}
+                <div className="card overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <CalendarClock size={15} className="text-brand-600" />
+                      <h2 className="section-title">Tahmini Stok Ömrü</h2>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Mevcut tüketim hızına göre kaç gün dayanır
+                    </p>
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Kritik ve uyarı seviyesindeki ürünler
-                  </p>
+                  <div className="px-4 pt-3 pb-4">
+                    <DaysToEmptyChart trends={trends} />
+                  </div>
                 </div>
-                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {criticalTrends.map(t => <TrendCard key={t.product_id} item={t} />)}
+
+                {/* Weekly flow */}
+                <div className="card overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <BarChart3 size={15} className="text-brand-600" />
+                      <h2 className="section-title">Haftalık Stok Hareketi</h2>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Son 7 günde toplam giriş ve çıkış
+                    </p>
+                  </div>
+                  <div className="px-4 pt-3 pb-4">
+                    <WeeklyFlowChart history={history} />
+                  </div>
                 </div>
+
               </div>
             )}
 
