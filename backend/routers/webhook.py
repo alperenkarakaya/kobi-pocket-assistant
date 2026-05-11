@@ -98,7 +98,16 @@ async def receive_message(
     db.commit()
     db.refresh(movement)
 
-    # ── Step 4: Build confirmation ────────────────────────────────────────
+    # ── Step 4: Create notification ──────────────────────────────────────
+    import crud as _crud
+    verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
+    _crud.create_notification(
+        db,
+        title=f"{verb_tr}: {parsed.quantity} {product.unit} {product.name}",
+        body=f"Kaynak: {source}" + (f" | Not: {parsed.reason}" if parsed.reason else ""),
+        type="stock_update",
+    )
+
     verb = "sisteme eklendi" if parsed.action == "in" else "sistemden düşüldü"
     return schemas.WebhookMessageResponse(
         status="success",

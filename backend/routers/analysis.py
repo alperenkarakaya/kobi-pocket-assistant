@@ -93,4 +93,20 @@ def analyze_stocks(db: Session = Depends(get_db)):
         logger.info("✅ CrewAI supply_email created for '%s'", item.get("product_name"))
 
     logger.info("analyze-stocks: %d new approval(s) created by AI Crew", created)
+
+    if created > 0:
+        crud.create_notification(
+            db,
+            title=f"AI Crew analizi tamamlandı — {created} tedarik talebi oluşturuldu",
+            body="Kritik ürünler için e-posta taslağı hazır. Lütfen onay panelini kontrol edin.",
+            type="ai_analysis",
+        )
+    else:
+        crud.create_notification(
+            db,
+            title="AI Crew analizi tamamlandı — tüm stoklar yeterli seviyede",
+            body=None,
+            type="info",
+        )
+
     return _pending_as_out(db)

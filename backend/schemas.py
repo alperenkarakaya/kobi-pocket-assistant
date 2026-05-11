@@ -24,6 +24,27 @@ class ApprovalStatus(str, Enum):
     rejected = "rejected"
 
 
+# ── Suppliers (defined early so ProductOut can reference it) ───────────────
+
+class SupplierBase(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    product_category: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class SupplierCreate(SupplierBase):
+    pass
+
+
+class SupplierOut(SupplierBase):
+    id: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # ── Product ────────────────────────────────────────────────────────────────
 
 class ProductBase(BaseModel):
@@ -42,6 +63,10 @@ class ProductOut(ProductBase):
     current_stock: float
     is_below_threshold: bool
     created_at: datetime
+    daily_consumption: float = 0.0
+    days_to_empty: Optional[float] = None
+    supplier_id: Optional[int] = None
+    supplier: Optional[SupplierOut] = None
 
     model_config = {"from_attributes": True}
 
@@ -156,6 +181,19 @@ class TaskOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Notifications ─────────────────────────────────────────────────────────
+
+class NotificationOut(BaseModel):
+    id: int
+    title: str
+    body: Optional[str] = None
+    type: str
+    is_read: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # ── Manual Stock Movement ──────────────────────────────────────────────────
 
 class ManualStockRequest(BaseModel):
@@ -178,3 +216,9 @@ class WebhookMessageResponse(BaseModel):
     message: str                      # human-readable Turkish response
     parsed: Optional[dict] = None     # the raw AI-extracted fields
     movement_id: Optional[int] = None # set on success
+
+
+# ── Supplier assignment ────────────────────────────────────────────────────
+
+class AssignSupplierRequest(BaseModel):
+    supplier_id: Optional[int] = None  # null to unassign

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -13,9 +13,11 @@ class Product(Base):
     sku = Column(String(100), unique=True, nullable=False, index=True)
     unit = Column(String(50), nullable=False)          # "kg", "unit", "liter", "ton"
     threshold = Column(Float, default=0.0)             # critical stock level — triggers alerts
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     movements = relationship("StockMovement", back_populates="product", lazy="dynamic")
+    supplier = relationship("Supplier", lazy="select", foreign_keys=[supplier_id])
 
     @property
     def current_stock(self) -> float:
@@ -64,3 +66,28 @@ class ActionApproval(Base):
     status = Column(String(20), default="pending")      # "pending" | "approved" | "rejected"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class Notification(Base):
+    """System-wide activity log — every significant action creates a notification."""
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+    type = Column(String(50), nullable=False, default="info")  # stock_update|email_sent|ai_analysis|alert|rejection|info
+    is_read = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class Supplier(Base):
+    """Cooperative supplier directory — linked to products for auto-fill in supply emails."""
+    __tablename__ = "suppliers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=False)
+    phone = Column(String(50), nullable=True)
+    product_category = Column(String(255), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

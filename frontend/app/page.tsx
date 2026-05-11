@@ -6,14 +6,9 @@ import KpiCard from "@/components/ui/KpiCard";
 import StockTable from "@/components/ui/StockTable";
 import ApprovalPanel, { type EmailOverrides } from "@/components/ui/ApprovalPanel";
 import {
-  Boxes,
-  AlertTriangle,
-  Clock,
-  TrendingUp,
-  Wifi,
-  WifiOff,
-  Sparkles,
-  Loader2,
+  Boxes, AlertTriangle, Clock, Activity,
+  Wifi, WifiOff, Sparkles, Loader2, RefreshCw,
+  TrendingDown, PackageCheck, BarChart3,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -33,6 +28,8 @@ interface StockLevel {
   threshold: number;
   current_stock: number;
   is_below_threshold: boolean;
+  daily_consumption: number;
+  days_to_empty: number | null;
 }
 
 export interface PendingApproval {
@@ -43,6 +40,21 @@ export interface PendingApproval {
   created_at: string;
 }
 
+interface TrendItem {
+  product_id: number;
+  product_name: string;
+  unit: string;
+  current_stock: number;
+  threshold: number;
+  stock_ratio: number;
+  is_critical: boolean;
+  daily_avg_consumption: number;
+  days_to_empty: number | null;
+  total_in_7d: number;
+  total_out_7d: number;
+  movement_count_7d: number;
+}
+
 interface DashboardData {
   kpis: Kpi[];
   stock_levels: StockLevel[];
@@ -50,17 +62,58 @@ interface DashboardData {
 }
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const KPI_ICONS = [Boxes, AlertTriangle, Clock, Activity];
 
-const KPI_ICONS = [Boxes, AlertTriangle, Clock, TrendingUp];
+// ── Analytics mini card ────────────────────────────────────────────────────
+
+function TrendCard({ item }: { item: TrendItem }) {
+  const ratio = item.stock_ratio;
+  const urgent = ratio < 0.3;
+  const warning = ratio >= 0.3 && ratio < 0.6;
+
+  return (
+    <div className={`rounded-lg border p-3 flex items-center gap-3 ${
+      urgent ? "bg-red-50 border-red-200" :
+      warning ? "bg-amber-50 border-amber-200" :
+      "bg-white border-slate-200"
+    }`}>
+      <div className={`w-1 self-stretch rounded-full flex-shrink-0 ${
+        urgent ? "bg-red-500" : warning ? "bg-amber-400" : "bg-brand-500"
+      }`} />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-slate-800 truncate">{item.product_name}</p>
+        <p className="text-xs text-slate-500 mt-0.5">
+          {item.daily_avg_consumption > 0
+            ? `${item.daily_avg_consumption.toFixed(1)} ${item.unit}/gün`
+            : "Tüketim verisi yok"
+          }
+        </p>
+      </div>
+      <div className="text-right flex-shrink-0">
+        {item.days_to_empty != null ? (
+          <p className={`text-sm font-bold ${
+            item.days_to_empty <= 3 ? "text-red-600" :
+            item.days_to_empty <= 7 ? "text-amber-600" : "text-slate-700"
+          }`}>
+            {Math.round(item.days_to_empty)} gün
+          </p>
+        ) : (
+          <p className="text-sm font-medium text-slate-400">—</p>
+        )}
+        <p className="text-[10px] text-slate-400">tahmini süre</p>
+      </div>
+    </div>
+  );
+}
 
 // ── Skeleton ───────────────────────────────────────────────────────────────
 
 function KpiSkeleton() {
   return (
-    <div className="card-glow rounded-xl bg-[#111a14] border border-[rgba(34,197,94,0.08)] p-6 animate-pulse">
-      <div className="h-4 w-24 bg-[#1e2d22] rounded mb-4" />
-      <div className="h-9 w-16 bg-[#1e2d22] rounded mb-2" />
-      <div className="h-3 w-12 bg-[#1e2d22] rounded" />
+    <div className="bg-white rounded-xl border border-slate-200 shadow-card p-5 animate-pulse">
+      <div className="h-9 w-9 bg-slate-100 rounded-lg mb-4" />
+      <div className="h-8 w-16 bg-slate-100 rounded mb-2" />
+      <div className="h-4 w-28 bg-slate-100 rounded" />
     </div>
   );
 }
@@ -69,19 +122,22 @@ function KpiSkeleton() {
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [trends, setTrends] = useState<TrendItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
 
-  // ── Fetch dashboard ─────────────────────────────────────────────────────
-
   const fetchDashboard = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/dashboard`);
-      if (!res.ok) throw new Error("API error");
-      const json: DashboardData = await res.json();
+      const [dashRes, trendRes] = await Promise.all([
+        fetch(`${API}/api/dashboard`),
+        fetch(`${API}/api/analytics/trends`),
+      ]);
+      if (!dashRes.ok) throw new Error("API error");
+      const json: DashboardData = await dashRes.json();
       setData(json);
+      if (trendRes.ok) setTrends(await trendRes.json());
       setLastUpdated(new Date());
       setApiError(false);
     } catch {
@@ -97,8 +153,6 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [fetchDashboard]);
 
-  // ── AI Analysis ─────────────────────────────────────────────────────────
-
   const handleAnalyze = async () => {
     setAnalyzing(true);
     const toastId = toast.loading("AI Crew analiz yapıyor (~30 saniye)...");
@@ -106,16 +160,15 @@ export default function DashboardPage() {
       const res = await fetch(`${API}/api/analyze-stocks`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail ?? "Analiz başarısız");
+        throw new Error((err as { detail?: string }).detail ?? "Analiz başarısız");
       }
       const approvals: PendingApproval[] = await res.json();
       await fetchDashboard();
-
-      const newCount = approvals.length;
+      const count = approvals.length;
       toast.success(
-        newCount > 0
-          ? `🤖 AI Crew tamamlandı — ${newCount} kritik ürün için tedarik talebi oluşturuldu.`
-          : "✅ AI Crew tamamlandı — tüm stoklar yeterli seviyede.",
+        count > 0
+          ? `AI Crew tamamlandı — ${count} kritik ürün için tedarik talebi oluşturuldu.`
+          : "AI Crew tamamlandı — tüm stoklar yeterli seviyede.",
         { id: toastId }
       );
     } catch (err: unknown) {
@@ -125,8 +178,6 @@ export default function DashboardPage() {
       setAnalyzing(false);
     }
   };
-
-  // ── Approve ─────────────────────────────────────────────────────────────
 
   const handleApprove = async (id: number, approval: PendingApproval, overrides: EmailOverrides) => {
     const product = (approval.payload.product_name as string) ?? "Ürün";
@@ -143,16 +194,13 @@ export default function DashboardPage() {
       });
       if (!res.ok) throw new Error("İşlem başarısız");
       await fetchDashboard();
-      toast.success(`📧 E-posta gönderildi — ${product} tedarik talebi onaylandı.`, {
-        id: toastId,
-        duration: 6000,
+      toast.success(`E-posta gönderildi — ${product} tedarik talebi onaylandı.`, {
+        id: toastId, duration: 6000,
       });
     } catch {
       toast.error("E-posta gönderilemedi. Tekrar deneyin.", { id: toastId });
     }
   };
-
-  // ── Reject ──────────────────────────────────────────────────────────────
 
   const handleReject = async (id: number, approval: PendingApproval) => {
     const product = (approval.payload.product_name as string) ?? "Ürün";
@@ -170,73 +218,67 @@ export default function DashboardPage() {
   };
 
   const fallbackKpis: Kpi[] = [
-    { label: "Total Products", value: "--" },
-    { label: "Low Stock Alerts", value: "--" },
-    { label: "Pending Approvals", value: "--" },
-    { label: "Today's Movements", value: "--" },
+    { label: "Toplam Ürün", value: "--" },
+    { label: "Kritik Stok", value: "--" },
+    { label: "Onay Bekleyen", value: "--" },
+    { label: "Bugünkü Hareket", value: "--" },
   ];
-
   const kpis = data?.kpis ?? fallbackKpis;
+  const criticalTrends = trends.filter(t => t.is_critical || t.stock_ratio < 0.6);
 
   return (
-    <div className="min-h-screen bg-[#0a0f0d] bg-grid-pattern bg-grid-sm relative">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-10%,rgba(34,197,94,0.08),transparent)]" />
-
-      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="min-h-screen bg-slate-50">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
         {/* ── Header ─────────────────────────────────────────────────── */}
-        <header className="flex items-start justify-between mb-10 gap-4 flex-wrap">
+        <div className="flex items-start justify-between mb-8 gap-4 flex-wrap">
           <div>
-            <span className="text-xs font-semibold tracking-widest text-brand-500 uppercase">
-              KOBI Pocket Assistant
-            </span>
-            <h1 className="text-3xl sm:text-4xl font-bold text-white text-glow-green tracking-tight mt-1">
-              Tire Cooperative Dashboard
+            <p className="text-xs font-semibold text-brand-600 uppercase tracking-widest mb-1">
+              Tire Tarım Kooperatifi
+            </p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
+              Operasyon Özet Panosu
             </h1>
-            <p className="text-slate-400 text-sm mt-1.5">
-              AI-powered inventory management • Real-time stock tracking
+            <p className="text-slate-500 text-sm mt-1">
+              AI destekli stok ve tedarik yönetimi
             </p>
           </div>
 
-          <div className="flex flex-col items-end gap-3 mt-1">
-            {/* AI Analysis button — the demo centerpiece */}
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Refresh indicator */}
+            {lastUpdated && (
+              <span className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400">
+                <RefreshCw size={11} />
+                {lastUpdated.toLocaleTimeString("tr-TR")}
+              </span>
+            )}
+
+            {/* API status */}
+            <div className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border ${
+              apiError
+                ? "text-red-600 border-red-200 bg-red-50"
+                : "text-brand-700 border-brand-200 bg-brand-50"
+            }`}>
+              {apiError ? <WifiOff size={12} /> : <Wifi size={12} />}
+              {apiError ? "API Bağlantı Hatası" : "Canlı"}
+            </div>
+
+            {/* AI Analysis button */}
             <button
               onClick={handleAnalyze}
               disabled={analyzing}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold
-                bg-gradient-to-r from-brand-600/80 to-emerald-600/80
-                border border-brand-500/30 text-white
-                hover:from-brand-600 hover:to-emerald-600
-                disabled:opacity-60 disabled:cursor-not-allowed
-                shadow-lg shadow-brand-900/30 transition-all duration-200"
+              className="btn-primary shadow-sm"
             >
-              {analyzing ? (
-                <Loader2 size={15} className="animate-spin" />
-              ) : (
-                <Sparkles size={15} />
-              )}
-              {analyzing ? "Crew çalışıyor..." : "AI Crew Analizi Başlat"}
+              {analyzing
+                ? <><Loader2 size={15} className="animate-spin" />Crew çalışıyor...</>
+                : <><Sparkles size={15} />AI Crew Analizi Başlat</>
+              }
             </button>
-
-            {/* Live status */}
-            <div className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border
-              ${apiError
-                ? "text-red-400 border-red-500/20 bg-red-500/10"
-                : "text-brand-400 border-brand-500/20 bg-brand-500/10"
-              }`}>
-              {apiError ? <WifiOff size={12} /> : <Wifi size={12} />}
-              {apiError ? "API Offline" : "Live"}
-            </div>
-            {lastUpdated && (
-              <span className="text-xs text-slate-500">
-                Updated {lastUpdated.toLocaleTimeString("tr-TR")}
-              </span>
-            )}
           </div>
-        </header>
+        </div>
 
         {/* ── KPI Cards ──────────────────────────────────────────────── */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           {loading
             ? Array.from({ length: 4 }).map((_, i) => <KpiSkeleton key={i} />)
             : kpis.map((kpi, i) => (
@@ -249,14 +291,71 @@ export default function DashboardPage() {
                   Icon={KPI_ICONS[i]}
                 />
               ))}
-        </section>
+        </div>
 
-        {/* ── Main Content ────────────────────────────────────────────── */}
+        {/* ── Main Content Grid ───────────────────────────────────────── */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          <div className="xl:col-span-2">
+
+          {/* Stock table (2/3) */}
+          <div className="xl:col-span-2 space-y-6">
             <StockTable stocks={data?.stock_levels ?? []} loading={loading} />
+
+            {/* Analytics Trends */}
+            {!loading && criticalTrends.length > 0 && (
+              <div className="card overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <BarChart3 size={16} className="text-brand-600" />
+                    <h2 className="section-title">7 Günlük Tüketim Tahmini</h2>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Kritik ve uyarı seviyesindeki ürünler
+                  </p>
+                </div>
+                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {criticalTrends.map(t => <TrendCard key={t.product_id} item={t} />)}
+                </div>
+              </div>
+            )}
+
+            {/* Summary stats */}
+            {!loading && trends.length > 0 && (
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  {
+                    icon: PackageCheck,
+                    label: "7 Günde Giren",
+                    value: `${trends.reduce((s, t) => s + t.total_in_7d, 0).toLocaleString("tr-TR", { maximumFractionDigits: 0 })} birim`,
+                    color: "text-brand-600 bg-brand-50",
+                  },
+                  {
+                    icon: TrendingDown,
+                    label: "7 Günde Çıkan",
+                    value: `${trends.reduce((s, t) => s + t.total_out_7d, 0).toLocaleString("tr-TR", { maximumFractionDigits: 0 })} birim`,
+                    color: "text-amber-600 bg-amber-50",
+                  },
+                  {
+                    icon: Activity,
+                    label: "Toplam Hareket",
+                    value: `${trends.reduce((s, t) => s + t.movement_count_7d, 0)} işlem`,
+                    color: "text-blue-600 bg-blue-50",
+                  },
+                ].map(({ icon: Icon, label, value, color }) => (
+                  <div key={label} className="card p-4 flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${color}`}>
+                      <Icon size={16} />
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500 font-medium">{label}</p>
+                      <p className="text-sm font-bold text-slate-800 mt-0.5">{value}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
+          {/* Approval panel (1/3) */}
           <div className="xl:col-span-1">
             <ApprovalPanel
               approvals={data?.pending_approvals ?? []}
@@ -267,8 +366,10 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <footer className="mt-12 pt-6 border-t border-[rgba(34,197,94,0.08)] text-center text-xs text-slate-600">
-          Powered by Gemini 2.5 Flash • FastAPI • Next.js 13
+        {/* ── Footer ─────────────────────────────────────────────────── */}
+        <footer className="mt-12 pt-6 border-t border-slate-200 flex items-center justify-between text-xs text-slate-400">
+          <span>Tire Tarım Kooperatifi · KOBI Tarım Asistanı v3.0</span>
+          <span>Gemini 2.5 Flash · CrewAI · FastAPI · Next.js</span>
         </footer>
       </div>
     </div>

@@ -1,18 +1,32 @@
 import json
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session
+
+import crud, models, schemas
 from database import get_db
-import crud, schemas
 
 router = APIRouter(tags=["Dashboard"])
 
 
+def _daily_consumption(db: Session, product_id: int, days: int = 7) -> float:
+    since = datetime.utcnow() - timedelta(days=days)
+    total_out = (
+        db.query(func.sum(models.StockMovement.quantity))
+        .filter(
+            models.StockMovement.product_id == product_id,
+            models.StockMovement.type == "out",
+            models.StockMovement.timestamp >= since,
+        )
+        .scalar() or 0.0
+    )
+    return round(abs(total_out) / max(days, 1), 2)
+
+
 @router.get("/dashboard", response_model=schemas.DashboardResponse)
 def get_dashboard(db: Session = Depends(get_db)):
-    """
-    Returns live KPIs and current stock levels by summing all StockMovements.
-    This is the main data feed for the web dashboard.
-    """
     products = crud.get_products(db)
     pending_approvals = crud.get_pending_approvals(db)
 
@@ -25,6 +39,9 @@ def get_dashboard(db: Session = Depends(get_db)):
         if is_below:
             below_threshold_count += 1
 
+        daily = _daily_consumption(db, p.id)
+        days_to_empty = round(current_stock / daily, 1) if daily > 0 else None
+
         stock_levels.append(
             schemas.ProductOut(
                 id=p.id,
@@ -35,28 +52,29 @@ def get_dashboard(db: Session = Depends(get_db)):
                 current_stock=current_stock,
                 is_below_threshold=is_below,
                 created_at=p.created_at,
+                daily_consumption=daily,
+                days_to_empty=days_to_empty,
             )
         )
 
     kpis = [
-        schemas.KpiCard(label="Total Products", value=len(products)),
+        schemas.KpiCard(label="Toplam Ürün", value=len(products)),
         schemas.KpiCard(
-            label="Low Stock Alerts",
+            label="Kritik Stok",
             value=below_threshold_count,
             alert=below_threshold_count > 0,
         ),
         schemas.KpiCard(
-            label="Pending Approvals",
+            label="Onay Bekleyen",
             value=len(pending_approvals),
             alert=len(pending_approvals) > 0,
         ),
         schemas.KpiCard(
-            label="Today's Movements",
+            label="Bugünkü Hareket",
             value=_count_todays_movements(db),
         ),
     ]
 
-    # Parse JSON payloads so the response is clean objects, not raw strings
     parsed_approvals = []
     for a in pending_approvals:
         parsed_approvals.append(
@@ -78,12 +96,11 @@ def get_dashboard(db: Session = Depends(get_db)):
 
 
 def _count_todays_movements(db: Session) -> int:
-    from sqlalchemy import func, cast, Date
-    from models import StockMovement
+    from sqlalchemy import cast, Date
     from datetime import date
 
     return (
-        db.query(StockMovement)
-        .filter(cast(StockMovement.timestamp, Date) == date.today())
+        db.query(models.StockMovement)
+        .filter(cast(models.StockMovement.timestamp, Date) == date.today())
         .count()
     )

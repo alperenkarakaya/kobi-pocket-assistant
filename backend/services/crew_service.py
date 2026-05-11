@@ -31,6 +31,17 @@ def _make_llm() -> LLM:
     )
 
 
+def _build_supplier_map(db: Session) -> dict[int, dict]:
+    """Returns {product_id: {name, email}} for products that have a supplier assigned."""
+    from models import Product
+    supplier_map: dict[int, dict] = {}
+    products = db.query(Product).all()
+    for p in products:
+        if p.supplier_id and p.supplier:
+            supplier_map[p.id] = {"name": p.supplier.name, "email": p.supplier.email}
+    return supplier_map
+
+
 def run_crew(db: Session) -> list[dict]:
     """
     Runs the 3-agent sequential crew.
@@ -39,6 +50,7 @@ def run_crew(db: Session) -> list[dict]:
     """
     llm = _make_llm()
     run_id = str(uuid.uuid4())[:8]
+    supplier_map = _build_supplier_map(db)
 
     # ── Agent 1: Stock Analyst ─────────────────────────────────────────────
     analyst = Agent(
@@ -132,11 +144,30 @@ def run_crew(db: Session) -> list[dict]:
         context=[task_analyze],
     )
 
+    # Build supplier context string for the drafter
+    if supplier_map:
+        supplier_lines = "\n".join(
+            f"  - Ürün ID {pid}: {s['name']} ({s['email']})"
+            for pid, s in supplier_map.items()
+        )
+        supplier_hint = (
+            f"\nTedarikçi rehberi (bu e-postaları firmaya ismiyle hitap ederek yaz):\n"
+            f"{supplier_lines}\n"
+            "recipient alanını bu tablodaki e-posta adreslerinden kullan. "
+            "Tabloda olmayan ürünler için recipient olarak 'tedarikci@example.com' yaz.\n"
+        )
+    else:
+        supplier_hint = (
+            "\nHenüz ürünlere tedarikçi atanmamış. "
+            "recipient alanı için 'tedarikci@example.com' kullan.\n"
+        )
+
     task_draft = Task(
         description=(
             "Planlayıcının JSON çıktısındaki her ürün için tedarik e-postası yaz.\n\n"
-            "Her e-posta: aciliyeti belirt, önerilen miktarı say, "
-            "'Tire Tarım Kooperatifi Yönetimi' imzası koy.\n\n"
+            f"{supplier_hint}\n"
+            "Her e-posta: tedarikçi firmasına ismiyle hitap et, aciliyeti belirt, "
+            "önerilen miktarı say, 'Tire Tarım Kooperatifi Yönetimi' imzası koy.\n\n"
             "YALNIZCA şu JSON formatında bir dizi döndür — başka hiçbir şey olmadan:\n"
             "[\n"
             "  {\n"
@@ -147,7 +178,8 @@ def run_crew(db: Session) -> list[dict]:
             '    "unit": "<str>",\n'
             '    "email_subject": "<kısa ve net konu>",\n'
             '    "email_body": "<tam e-posta metni>",\n'
-            '    "recipient": "tedarikci@example.com",\n'
+            '    "recipient": "<tedarikçi e-postası>",\n'
+            '    "supplier_name": "<tedarikçi firma adı veya boş string>",\n'
             '    "agent_analysis": {\n'
             '      "stock_ratio": <float>,\n'
             '      "deficit": <float>,\n'
@@ -199,6 +231,12 @@ def run_crew(db: Session) -> list[dict]:
     for item in items:
         item["generated_by"] = "crewai_v1"
         item["crew_run_id"] = run_id
+        # Always override recipient with actual supplier email (crew can hallucinate)
+        pid = item.get("product_id")
+        if pid and int(pid) in supplier_map:
+            s = supplier_map[int(pid)]
+            item["recipient"] = s["email"]
+            item["supplier_name"] = s["name"]
 
     logger.info("CrewAI run %s complete — %d items", run_id, len(items))
     return items
