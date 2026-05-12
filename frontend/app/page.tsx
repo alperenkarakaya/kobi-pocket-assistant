@@ -12,6 +12,7 @@ import {
   Wifi, WifiOff, Sparkles, Loader2, RefreshCw,
   TrendingDown, PackageCheck, BarChart3, CalendarClock,
   X, Send, MessageSquare, ChevronRight,
+  Search, FileStack, Mail,
 } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 
@@ -208,6 +209,7 @@ export default function DashboardPage() {
   const [apiError, setApiError] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [crewStep, setCrewStep]   = useState(0); // 0=idle 1=analyst 2=planner 3=drafter
 
   const fetchDashboard = useCallback(async () => {
     try {
@@ -238,6 +240,9 @@ export default function DashboardPage() {
 
   const handleAnalyze = async () => {
     setAnalyzing(true);
+    setCrewStep(1);
+    const t2 = setTimeout(() => setCrewStep(2), 10_000);
+    const t3 = setTimeout(() => setCrewStep(3), 22_000);
     const toastId = toast.loading("Tedarik analizi yapılıyor (~30 saniye)...");
     try {
       const res = await apiFetch("/api/analyze-stocks", { method: "POST" });
@@ -250,14 +255,17 @@ export default function DashboardPage() {
       const count = approvals.length;
       toast.success(
         count > 0
-          ? `Analiz tamamlandı — ${count} kritik ürün için tedarik talebi oluşturuldu.`
-          : "Analiz tamamlandı — tüm stoklar yeterli seviyede.",
-        { id: toastId }
+          ? `AI Crew tamamlandı — ${count} kritik ürün için tedarik talebi oluşturuldu.`
+          : "AI Crew tamamlandı — tüm stoklar yeterli seviyede.",
+        { id: toastId, duration: 6000 }
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Bilinmeyen hata";
-      toast.error(`Analiz hatası: ${msg}`, { id: toastId });
+      toast.error(`Analiz hatası: ${msg}`);
     } finally {
+      clearTimeout(t2);
+      clearTimeout(t3);
+      setCrewStep(0);
       setAnalyzing(false);
     }
   };
@@ -357,6 +365,39 @@ export default function DashboardPage() {
                 : <><Sparkles size={15} />Tedarik Analizi Yap</>
               }
             </button>
+
+            {/* Crew step progress */}
+            {analyzing && crewStep > 0 && (
+              <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-sm text-xs">
+                {[
+                  { step: 1, icon: Search,     label: "Stok Analisti"   },
+                  { step: 2, icon: FileStack,  label: "Tedarik Plancı"  },
+                  { step: 3, icon: Mail,        label: "E-posta Taslakçı" },
+                ].map(({ step, icon: Icon, label }, idx) => {
+                  const done   = crewStep > step;
+                  const active = crewStep === step;
+                  return (
+                    <div key={step} className="flex items-center gap-1.5">
+                      {idx > 0 && (
+                        <span className={`w-4 h-px ${done ? "bg-brand-400" : "bg-slate-200"}`} />
+                      )}
+                      <div className={`flex items-center gap-1 px-2 py-1 rounded-lg transition-all ${
+                        done    ? "bg-brand-50 text-brand-600" :
+                        active  ? "bg-purple-50 text-purple-700 ring-1 ring-purple-200" :
+                                  "text-slate-300"
+                      }`}>
+                        {active
+                          ? <Loader2 size={11} className="animate-spin" />
+                          : <Icon size={11} className={done ? "text-brand-500" : ""} />
+                        }
+                        <span className="font-medium hidden sm:inline">{label}</span>
+                        <span className="font-medium sm:hidden">{step}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 

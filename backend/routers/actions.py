@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 import crud, models, schemas
 from services.email_service import send_gmail, SENDER_ADDRESS
+from services import ai_service
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,42 @@ async def reject_action(
         created_at=db_action.created_at,
         updated_at=db_action.updated_at,
     )
+
+
+# ── Regenerate email tone ──────────────────────────────────────────────────
+
+@router.post("/actions/{action_id}/regenerate")
+async def regenerate_action_email(
+    action_id: int,
+    request: schemas.RegenerateEmailRequest,
+    db: Session = Depends(get_db),
+):
+    db_action = crud.get_pending_approvals(db)
+    target = next((a for a in db_action if a.id == action_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Onay kaydı bulunamadı veya zaten işlendi.")
+
+    payload = json.loads(target.payload) if target.payload else {}
+    product_name = payload.get("product_name", "Ürün")
+    unit = payload.get("unit", "adet")
+    current_stock = float(payload.get("current_stock", 0))
+    threshold = float(payload.get("threshold", 0))
+    existing_subject = payload.get("email_subject", payload.get("subject", "Tedarik Talebi"))
+    existing_body = payload.get("email_body", payload.get("body", ""))
+
+    try:
+        result = ai_service.regenerate_email_tone(
+            product_name=product_name,
+            unit=unit,
+            current_stock=current_stock,
+            threshold=threshold,
+            existing_subject=existing_subject,
+            existing_body=existing_body,
+            tone=request.tone,
+        )
+        return {"subject": result["subject"], "body": result["body"]}
+    except ai_service.AIParsingError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ── List ───────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Bell, X, CheckCheck, Package, Mail, Brain,
-  AlertTriangle, Info, Ban, RefreshCw,
+  AlertTriangle, Info, Ban, RefreshCw, Check,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { apiFetch } from "@/lib/auth";
@@ -36,8 +36,9 @@ function timeAgo(iso: string): string {
 
 export default function NotificationBar() {
   const [open, setOpen] = useState(false);
+  // Only keep unread notifications in state — read ones are removed immediately
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [unread, setUnread] = useState(0);
+  const [markingId, setMarkingId] = useState<number | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const fetchNotifications = useCallback(async () => {
@@ -45,8 +46,8 @@ export default function NotificationBar() {
       const res = await apiFetch("/api/notifications");
       if (!res.ok) return;
       const data: Notification[] = await res.json();
-      setNotifications(data);
-      setUnread(data.filter(n => !n.is_read).length);
+      // Panel shows only unread notifications
+      setNotifications(data.filter(n => !n.is_read));
     } catch {
       // API not available — silently ignore
     }
@@ -70,25 +71,35 @@ export default function NotificationBar() {
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const handleOpen = () => {
-    setOpen(prev => !prev);
+  const handleMarkOne = async (id: number) => {
+    setMarkingId(id);
+    try {
+      await apiFetch(`/api/notifications/${id}/read`, { method: "PATCH" });
+      // Remove from panel immediately
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    } catch {
+      // ignore
+    } finally {
+      setMarkingId(null);
+    }
   };
 
   const handleMarkAllRead = async () => {
     try {
       await apiFetch("/api/notifications/read-all", { method: "PATCH" });
-      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
-      setUnread(0);
+      setNotifications([]);
     } catch {
       // ignore
     }
   };
 
+  const unread = notifications.length;
+
   return (
     <div className="relative" ref={panelRef}>
       {/* Bell button */}
       <button
-        onClick={handleOpen}
+        onClick={() => setOpen(prev => !prev)}
         className={clsx(
           "relative p-2 rounded-lg transition-colors",
           open
@@ -151,28 +162,23 @@ export default function NotificationBar() {
             {notifications.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-slate-300">
                 <Bell size={28} strokeWidth={1} />
-                <p className="text-xs mt-2">Henüz bildirim yok</p>
+                <p className="text-xs mt-2">Tüm bildirimler okundu</p>
               </div>
             ) : (
               notifications.map(n => {
                 const cfg = TYPE_CONFIG[n.type] ?? TYPE_CONFIG.info;
                 const IconComp = cfg.icon;
+                const isMarking = markingId === n.id;
                 return (
                   <div
                     key={n.id}
-                    className={clsx(
-                      "flex gap-3 px-4 py-3 border-b border-slate-50 last:border-0 transition-colors",
-                      !n.is_read ? "bg-slate-50/70" : "bg-white"
-                    )}
+                    className="flex gap-3 px-4 py-3 border-b border-slate-50 last:border-0 bg-slate-50/70 hover:bg-slate-100/60 transition-colors group"
                   >
                     <div className={clsx("flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center mt-0.5", cfg.bg)}>
                       <IconComp size={13} className={cfg.color} />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className={clsx(
-                        "text-xs leading-snug text-slate-800",
-                        !n.is_read && "font-semibold"
-                      )}>
+                      <p className="text-xs font-semibold leading-snug text-slate-800">
                         {n.title}
                       </p>
                       {n.body && (
@@ -180,9 +186,20 @@ export default function NotificationBar() {
                       )}
                       <p className="text-[10px] text-slate-300 mt-1">{timeAgo(n.created_at)}</p>
                     </div>
-                    {!n.is_read && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-brand-500 flex-shrink-0 mt-1.5" />
-                    )}
+                    {/* Per-notification mark-as-read button */}
+                    <button
+                      onClick={() => handleMarkOne(n.id)}
+                      disabled={isMarking}
+                      className={clsx(
+                        "flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center mt-0.5 transition-all",
+                        isMarking
+                          ? "bg-green-100 text-green-500"
+                          : "opacity-0 group-hover:opacity-100 bg-slate-100 hover:bg-green-100 text-slate-400 hover:text-green-600"
+                      )}
+                      title="Okundu olarak işaretle"
+                    >
+                      <Check size={11} strokeWidth={2.5} />
+                    </button>
                   </div>
                 );
               })

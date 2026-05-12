@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -21,3 +21,11 @@ def unread_count(db: Session = Depends(get_db)):
 def mark_all_read(db: Session = Depends(get_db)):
     count = crud.mark_all_notifications_read(db)
     return {"marked_read": count}
+
+
+@router.patch("/notifications/{notif_id}/read", response_model=schemas.NotificationOut)
+def mark_one_read(notif_id: int, db: Session = Depends(get_db)):
+    notif = crud.mark_notification_read(db, notif_id)
+    if not notif:
+        raise HTTPException(status_code=404, detail="Bildirim bulunamadı")
+    return notif

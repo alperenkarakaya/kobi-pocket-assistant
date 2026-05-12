@@ -28,6 +28,7 @@ from telegram.ext import (
     filters,
 )
 
+import crud
 import models
 from database import SessionLocal
 from services import ai_service
@@ -37,17 +38,22 @@ logger = logging.getLogger(__name__)
 
 _TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
-# Track all chat IDs that have interacted with the bot for morning briefings
-_active_chat_ids: set[int] = set()
-
 
 def get_active_chat_ids() -> set[int]:
-    return _active_chat_ids.copy()
+    db = SessionLocal()
+    try:
+        return set(crud.get_telegram_chat_ids(db))
+    finally:
+        db.close()
 
 
 def _register_chat(update: Update) -> None:
     if update.effective_chat:
-        _active_chat_ids.add(update.effective_chat.id)
+        db = SessionLocal()
+        try:
+            crud.register_telegram_chat(db, update.effective_chat.id)
+        finally:
+            db.close()
 
 
 # ── Briefing builder ───────────────────────────────────────────────────────
