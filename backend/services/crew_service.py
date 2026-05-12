@@ -113,36 +113,41 @@ def run_crew(db: Session) -> list[dict]:
     task_analyze = Task(
         description=(
             "1. get_all_stock_status aracını çağır — tüm ürünlerin listesini al.\n"
-            "2. is_critical=true olan her ürün için:\n"
+            "2. Analiz edilecek ürünler: is_critical=true VEYA is_warning=true olan her ürün.\n"
+            "   (urgency=LOW olan ürünleri tamamen yoksay — bunlar yeterli stoka sahip)\n"
+            "3. Seçilen her ürün için:\n"
             "   - get_consumption_rate(product_id, days=7) çağır\n"
             "   - get_movement_history(product_id, limit=10) çağır\n"
-            "3. Her kritik ürün için şunu hesapla:\n"
-            "   - urgency_level: is_critical=true olan her ürün → DAİMA HIGH\n"
-            "     (stok eşiğin altındaysa, oran ne olursa olsun acil demektir)\n"
-            "   - days_to_empty: current_stock / daily_avg_consumption (0 ise 'hesaplanamadı')\n"
-            "4. Kritik ürünlerin özetini JSON olarak çıkar:\n"
+            "4. urgency_level ZORUNLU KURAL — araçtan gelen 'urgency' değerini aynen kullan:\n"
+            "   - urgency='HIGH'   → urgency_level='HIGH'   (stok eşiğin ALTINDA)\n"
+            "   - urgency='MEDIUM' → urgency_level='MEDIUM' (stok eşiğin 0-20% üstünde)\n"
+            "   Bu değerleri kesinlikle değiştirme; stock_ratio'ya bakarak yeniden hesaplama.\n"
+            "5. days_to_empty: current_stock / daily_avg_consumption (tüketim yoksa null)\n"
+            "6. Çıktı JSON:\n"
             "   [{id, name, unit, current_stock, threshold, stock_ratio, deficit,\n"
-            "     urgency_level, daily_avg_consumption, days_to_empty}]"
+            "     urgency_level, daily_avg_consumption, days_to_empty}]\n"
+            "   Sadece HIGH ve MEDIUM ürünler — LOW'ları dahil etme."
         ),
         agent=analyst,
-        expected_output="JSON array of critical products with urgency analysis",
+        expected_output="JSON array of HIGH and MEDIUM urgency products with consumption analysis",
     )
 
     task_plan = Task(
         description=(
             "Analistin JSON çıktısını al. Her ürün için:\n"
             "1. recommended_order_qty hesapla:\n"
-            "   - Temel: (threshold * 2) - current_stock\n"
-            "   - daily_avg_consumption > threshold/7 ise 1.5x çarp (yüksek tüketim)\n"
+            "   - HIGH ürünler: (threshold * 2) - current_stock\n"
+            "     daily_avg_consumption > threshold/7 ise 1.5x çarp\n"
+            "   - MEDIUM ürünler: (threshold * 1.5) - current_stock (yaklaşan eşik, ılımlı sipariş)\n"
             "   - En az 1 birim olsun\n"
-            "2. urgency_label ekle: HIGH→'Kritik', MEDIUM→'Orta', LOW→'Düşük'\n"
-            "   NOT: is_critical=true olan tüm ürünler HIGH olarak işaretlenmiş olmalı.\n"
-            "3. Türkçe reasoning yaz (2-3 cümle): neden acil, ne kadar süre kaldı\n"
-            "4. stock_ratio en düşük ürün = en üstte olacak şekilde sırala\n"
+            "2. urgency_label ZORUNLU: HIGH→'Kritik', MEDIUM→'Orta'\n"
+            "   Analistten gelen urgency_level değerini olduğu gibi kullan — değiştirme.\n"
+            "3. Türkçe reasoning yaz (2-3 cümle): mevcut durum, tüketim hızı, aciliyet gerekçesi\n"
+            "4. Önce HIGH, sonra MEDIUM olacak şekilde sırala; aynı seviyede stock_ratio artar\n"
             "Çıktı: aynı JSON dizisi, recommended_order_qty, urgency_label, reasoning eklenerek."
         ),
         agent=planner,
-        expected_output="JSON array with order quantities, urgency labels, and Turkish reasoning",
+        expected_output="JSON array with order quantities, urgency labels (Kritik/Orta only), and Turkish reasoning",
         context=[task_analyze],
     )
 

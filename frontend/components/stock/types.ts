@@ -36,5 +36,18 @@ export interface TrendItem {
 }
 
 export type AnalyticsHistory = DailyProduct[];
-export type ActiveTab = "products" | "analytics";
+export type ActiveTab = "products" | "analytics" | "history";
 export type Modal = "new-product" | "add-stock" | "remove-stock" | "delete" | null;
+
+export interface StockMovementRow {
+  id: number;
+  timestamp: string;
+  product_id: number;
+  product_name: string;
+  product_sku: string;
+  unit: string;
+  quantity: number;
+  type: string;
+  source: string;
+  notes: string | null;
+}

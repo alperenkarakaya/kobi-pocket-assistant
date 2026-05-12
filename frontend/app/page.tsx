@@ -5,16 +5,17 @@ import Link from "next/link";
 import { toast } from "sonner";
 import KpiCard from "@/components/ui/KpiCard";
 import StockTable from "@/components/ui/StockTable";
-import ApprovalPanel, { type EmailOverrides } from "@/components/ui/ApprovalPanel";
-import { DaysToEmptyChart, WeeklyFlowChart, type DailyProduct } from "@/components/ui/StockCharts";
+import type { DailyProduct } from "@/components/ui/StockCharts";
 import {
   Boxes, AlertTriangle, Clock, Activity,
   Wifi, WifiOff, Sparkles, Loader2, RefreshCw,
-  TrendingDown, PackageCheck, BarChart3, CalendarClock,
-  X, Send, MessageSquare, ChevronRight,
+  TrendingDown, PackageCheck,
+  X, ChevronRight,
   Search, FileStack, Mail,
 } from "lucide-react";
-import { apiFetch } from "@/lib/auth";
+import { apiFetch, getToken } from "@/lib/auth";
+import ApprovalPanel, { type EmailOverrides } from "@/components/ui/ApprovalPanel";
+import { useCopilot } from "@/components/CopilotContext";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -108,84 +109,6 @@ function CriticalAlertBanner({ stocks }: { stocks: StockLevel[] }) {
   );
 }
 
-// ── Quick Stock Entry ──────────────────────────────────────────────────────
-
-interface QuickEntryResponse {
-  status: string;
-  message: string;
-}
-
-function QuickStockEntry({ onSuccess }: { onSuccess: () => void }) {
-  const [text, setText] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<QuickEntryResponse | null>(null);
-
-  const handleSubmit = async () => {
-    const trimmed = text.trim();
-    if (!trimmed || loading) return;
-    setLoading(true);
-    setResult(null);
-    try {
-      const res = await apiFetch("/api/webhook/message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: trimmed }),
-      });
-      const data: QuickEntryResponse = await res.json();
-      setResult(data);
-      if (data.status === "success") {
-        setText("");
-        onSuccess();
-      }
-    } catch {
-      setResult({ status: "error", message: "Bağlantı hatası. Tekrar deneyin." });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="card p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <MessageSquare size={14} className="text-brand-600" />
-        <h3 className="section-title">Hızlı Stok Girişi</h3>
-        <span className="text-xs text-slate-400 ml-auto">AI · doğal dil</span>
-      </div>
-      <div className="flex gap-2">
-        <input
-          value={text}
-          onChange={e => { setText(e.target.value); setResult(null); }}
-          onKeyDown={e => e.key === "Enter" && handleSubmit()}
-          placeholder="örn: 500 kg buğday teslim alındı"
-          className="form-input flex-1 h-10"
-          disabled={loading}
-        />
-        <button
-          onClick={handleSubmit}
-          disabled={!text.trim() || loading}
-          className="btn-primary h-10 px-4"
-          title="Gönder (Enter)"
-        >
-          {loading
-            ? <Loader2 size={15} className="animate-spin" />
-            : <Send size={15} />
-          }
-        </button>
-      </div>
-      {result && (
-        <p className={`text-xs mt-2 font-medium ${
-          result.status === "success" ? "text-gsuccess-700" :
-          result.status === "warning" ? "text-amber-700" : "text-red-600"
-        }`}>
-          {result.message}
-        </p>
-      )}
-      <p className="text-xs text-slate-400 mt-2">
-        WhatsApp&apos;a yazdığınız gibi yazın — AI stok kaydını otomatik oluşturur
-      </p>
-    </div>
-  );
-}
 
 // ── Skeleton ───────────────────────────────────────────────────────────────
 
@@ -202,6 +125,7 @@ function KpiSkeleton() {
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const { setPendingCount } = useCopilot();
   const [data, setData] = useState<DashboardData | null>(null);
   const [trends, setTrends] = useState<TrendItem[]>([]);
   const [history, setHistory] = useState<DailyProduct[]>([]);
@@ -210,6 +134,12 @@ export default function DashboardPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [crewStep, setCrewStep]   = useState(0); // 0=idle 1=analyst 2=planner 3=drafter
+
+  useEffect(() => {
+    if (!getToken()) {
+      window.location.href = "/login";
+    }
+  }, []);
 
   const fetchDashboard = useCallback(async () => {
     try {
@@ -221,6 +151,7 @@ export default function DashboardPage() {
       if (!dashRes.ok) throw new Error("API error");
       const json: DashboardData = await dashRes.json();
       setData(json);
+      setPendingCount(json.pending_approvals?.length ?? 0);
       if (trendRes.ok) setTrends(await trendRes.json());
       if (histRes.ok) setHistory(await histRes.json());
       setLastUpdated(new Date());
@@ -230,7 +161,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setPendingCount]);
 
   useEffect(() => {
     fetchDashboard();
@@ -270,20 +201,24 @@ export default function DashboardPage() {
     }
   };
 
-  const handleApprove = async (id: number, approval: PendingApproval, overrides: EmailOverrides) => {
+  const handleApprove = async (
+    id: number,
+    approval: PendingApproval,
+    overrides: EmailOverrides,
+  ) => {
     const product = (approval.payload.product_name as string) ?? "Ürün";
     const toastId = toast.loading(`${product} için e-posta gönderiliyor...`);
     try {
       const res = await apiFetch(`/api/actions/${id}/approve`, {
-        method: "POST",
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body:    JSON.stringify({
           email_subject: overrides.subject,
-          email_body: overrides.body,
-          recipient: overrides.recipient,
+          email_body:    overrides.body,
+          recipient:     overrides.recipient,
         }),
       });
-      if (!res.ok) throw new Error("İşlem başarısız");
+      if (!res.ok) throw new Error();
       await fetchDashboard();
       toast.success(`E-posta gönderildi — ${product} tedarik talebi onaylandı.`, {
         id: toastId, duration: 6000,
@@ -297,9 +232,9 @@ export default function DashboardPage() {
     const product = (approval.payload.product_name as string) ?? "Ürün";
     try {
       await apiFetch(`/api/actions/${id}/reject`, {
-        method: "POST",
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body:    JSON.stringify({}),
       });
       await fetchDashboard();
       toast(`${product} tedarik talebi reddedildi.`);
@@ -422,100 +357,62 @@ export default function DashboardPage() {
               ))}
         </div>
 
-        {/* ── Main Content Grid ───────────────────────────────────────── */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        {/* ── Main Content ────────────────────────────────────────────── */}
+        <div className="space-y-6">
 
-          {/* Stock table (2/3) */}
-          <div className="xl:col-span-2 space-y-6">
-            <StockTable stocks={data?.stock_levels ?? []} loading={loading} />
+          {/* Stok Seviyeleri + AI Crew side-by-side */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
 
-            {/* Quick stock entry */}
-            <QuickStockEntry onSuccess={fetchDashboard} />
+            {/* Left column: table + summary stats */}
+            <div className="xl:col-span-2 space-y-4">
+              <StockTable stocks={data?.stock_levels ?? []} loading={loading} />
 
-            {/* Charts */}
-            {!loading && trends.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-                {/* Days-to-empty */}
-                <div className="card overflow-hidden">
-                  <div className="px-5 py-4 border-b border-slate-100">
-                    <div className="flex items-center gap-2">
-                      <CalendarClock size={15} className="text-brand-600" />
-                      <h2 className="section-title">Tahmini Stok Ömrü</h2>
+              {!loading && trends.length > 0 && (
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    {
+                      icon: PackageCheck,
+                      label: "7 Günde Giriş",
+                      value: `${trends.filter(t => t.total_in_7d > 0).length} ürün`,
+                      color: "text-gsuccess-600 bg-gsuccess-50",
+                    },
+                    {
+                      icon: TrendingDown,
+                      label: "7 Günde Çıkış",
+                      value: `${trends.filter(t => t.total_out_7d > 0).length} ürün`,
+                      color: "text-amber-600 bg-amber-50",
+                    },
+                    {
+                      icon: Activity,
+                      label: "Toplam Hareket",
+                      value: `${trends.reduce((s, t) => s + t.movement_count_7d, 0)} işlem`,
+                      color: "text-blue-600 bg-blue-50",
+                    },
+                  ].map(({ icon: Icon, label, value, color }) => (
+                    <div key={label} className="card p-4 flex items-center gap-3">
+                      <div className={`p-2 rounded-lg ${color}`}>
+                        <Icon size={16} />
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-500 font-medium">{label}</p>
+                        <p className="text-sm font-bold text-slate-800 mt-0.5">{value}</p>
+                      </div>
                     </div>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Mevcut tüketim hızına göre kaç gün dayanır
-                    </p>
-                  </div>
-                  <div className="px-4 pt-3 pb-4">
-                    <DaysToEmptyChart trends={trends} />
-                  </div>
+                  ))}
                 </div>
+              )}
+            </div>
 
-                {/* Weekly flow */}
-                <div className="card overflow-hidden">
-                  <div className="px-5 py-4 border-b border-slate-100">
-                    <div className="flex items-center gap-2">
-                      <BarChart3 size={15} className="text-brand-600" />
-                      <h2 className="section-title">Haftalık Stok Hareketi</h2>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Son 7 günde toplam giriş ve çıkış
-                    </p>
-                  </div>
-                  <div className="px-4 pt-3 pb-4">
-                    <WeeklyFlowChart history={history} />
-                  </div>
-                </div>
+            {/* Right column: mail suggestions */}
+            <div className="xl:col-span-1">
+              <ApprovalPanel
+                approvals={data?.pending_approvals ?? []}
+                loading={loading}
+                onApprove={handleApprove}
+                onReject={handleReject}
+              />
+            </div>
 
-              </div>
-            )}
-
-            {/* Summary stats */}
-            {!loading && trends.length > 0 && (
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  {
-                    icon: PackageCheck,
-                    label: "7 Günde Giriş",
-                    value: `${trends.filter(t => t.total_in_7d > 0).length} ürün`,
-                    color: "text-gsuccess-600 bg-gsuccess-50",
-                  },
-                  {
-                    icon: TrendingDown,
-                    label: "7 Günde Çıkış",
-                    value: `${trends.filter(t => t.total_out_7d > 0).length} ürün`,
-                    color: "text-amber-600 bg-amber-50",
-                  },
-                  {
-                    icon: Activity,
-                    label: "Toplam Hareket",
-                    value: `${trends.reduce((s, t) => s + t.movement_count_7d, 0)} işlem`,
-                    color: "text-blue-600 bg-blue-50",
-                  },
-                ].map(({ icon: Icon, label, value, color }) => (
-                  <div key={label} className="card p-4 flex items-center gap-3">
-                    <div className={`p-2 rounded-lg ${color}`}>
-                      <Icon size={16} />
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-500 font-medium">{label}</p>
-                      <p className="text-sm font-bold text-slate-800 mt-0.5">{value}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Approval panel (1/3) */}
-          <div className="xl:col-span-1">
-            <ApprovalPanel
-              approvals={data?.pending_approvals ?? []}
-              loading={loading}
-              onApprove={handleApprove}
-              onReject={handleReject}
-            />
           </div>
         </div>
 

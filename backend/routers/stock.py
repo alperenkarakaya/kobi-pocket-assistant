@@ -73,6 +73,33 @@ def assign_supplier(
     return _product_out(product, db)
 
 
+@router.get("/stock/movements", response_model=list[schemas.StockMovementRow])
+def list_movements(limit: int = 300, db: Session = Depends(get_db)):
+    """Returns the most recent stock movements with product info for the history ledger UI."""
+    rows = (
+        db.query(models.StockMovement)
+        .join(models.Product)
+        .order_by(models.StockMovement.timestamp.desc())
+        .limit(min(limit, 500))
+        .all()
+    )
+    return [
+        schemas.StockMovementRow(
+            id=r.id,
+            timestamp=r.timestamp,
+            product_id=r.product_id,
+            product_name=r.product.name,
+            product_sku=r.product.sku,
+            unit=r.product.unit,
+            quantity=r.quantity,
+            type=r.type,
+            source=r.source,
+            notes=r.notes,
+        )
+        for r in rows
+    ]
+
+
 @router.post("/stock/movement", response_model=schemas.StockMovementOut, status_code=201)
 def create_manual_movement(req: schemas.ManualStockRequest, db: Session = Depends(get_db)):
     """

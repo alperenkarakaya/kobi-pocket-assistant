@@ -236,10 +236,19 @@ async def receive_message(
             parsed = ai_service.parse_image(image_bytes, payload.mime_type)
         else:
             parsed = ai_service.parse_text(payload.text)  # type: ignore[arg-type]
-    except APIKeyMissingError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    except AIParsingError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    except APIKeyMissingError:
+        if payload.image_base64:
+            raise HTTPException(status_code=503, detail="GEMINI_API_KEY yapılandırılmamış.")
+        return schemas.WebhookMessageResponse(
+            status="chat",
+            message="Merhaba! Ben KOBI asistanınızım. Şu an AI servisi yapılandırılmamış — lütfen sistem yöneticisiyle iletişime geçin.",
+        )
+    except AIParsingError:
+        if payload.image_base64:
+            raise HTTPException(status_code=422, detail="Fotoğraf ayrıştırılamadı — daha net bir görsel deneyin.")
+        # Text message didn't match a stock command — treat as general chat
+        reply = ai_service.chat_reply(payload.text or "")
+        return schemas.WebhookMessageResponse(status="chat", message=reply)
 
     logger.info("AI parsed: product=%s qty=%s action=%s", parsed.product_name, parsed.quantity, parsed.action)
 

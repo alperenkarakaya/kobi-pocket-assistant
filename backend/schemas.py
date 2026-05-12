@@ -218,6 +218,23 @@ class WebhookMessageResponse(BaseModel):
     movement_id: Optional[int] = None # set on success
 
 
+# ── Stock Movement History (for /stock/movements endpoint) ────────────────
+
+class StockMovementRow(BaseModel):
+    id: int
+    timestamp: datetime
+    product_id: int
+    product_name: str
+    product_sku: str
+    unit: str
+    quantity: float
+    type: str        # loose str — DB may contain values beyond the enum
+    source: str      # loose str — same reason
+    notes: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 # ── Supplier assignment ────────────────────────────────────────────────────
 
 class AssignSupplierRequest(BaseModel):

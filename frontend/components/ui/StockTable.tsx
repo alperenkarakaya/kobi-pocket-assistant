@@ -30,9 +30,10 @@ function StockBar({ current, threshold }: { current: number; threshold: number }
   const ratio = threshold > 0 ? current / threshold : 1;
 
   const isCritical = threshold > 0 && current < threshold;
+  const isWarning  = !isCritical && ratio < 1.2;
   const barColor =
-    isCritical ? "bg-red-500" :
-    ratio < 0.6 ? "bg-amber-400" :
+    isCritical  ? "bg-red-500" :
+    isWarning   ? "bg-amber-400" :
     "bg-gsuccess-500";
 
   return (
@@ -115,10 +116,17 @@ export default function StockTable({ stocks, loading }: Props) {
           <h2 className="section-title">Stok Seviyeleri</h2>
           {!loading && (
             <p className="text-xs text-slate-400 mt-0.5">
-              {filtered.length}/{stocks.length} ürün &nbsp;·&nbsp;
-              <span className="text-red-500 font-medium">
-                {stocks.filter(s => s.is_below_threshold).length} kritik
-              </span>
+              {filtered.length}/{stocks.length} ürün
+              {stocks.filter(s => s.is_below_threshold).length > 0 && (
+                <>&nbsp;·&nbsp;<span className="text-red-500 font-medium">
+                  {stocks.filter(s => s.is_below_threshold).length} kritik
+                </span></>
+              )}
+              {stocks.filter(s => !s.is_below_threshold && s.threshold > 0 && s.current_stock / s.threshold < 1.2).length > 0 && (
+                <>&nbsp;·&nbsp;<span className="text-amber-500 font-medium">
+                  {stocks.filter(s => !s.is_below_threshold && s.threshold > 0 && s.current_stock / s.threshold < 1.2).length} dikkat
+                </span></>
+              )}
             </p>
           )}
         </div>
@@ -193,12 +201,13 @@ export default function StockTable({ stocks, loading }: Props) {
                 </tr>
               ) : filtered.map((s) => {
                 const ratio = s.threshold > 0 ? s.current_stock / s.threshold : 1;
+                const isWarning = !s.is_below_threshold && ratio < 1.2;
                 return (
                   <tr
                     key={s.id}
                     className={clsx(
                       "transition-colors hover:bg-slate-50",
-                      s.is_below_threshold && "bg-red-50/40"
+                      s.is_below_threshold ? "bg-red-50/40" : isWarning && "bg-amber-50/40"
                     )}
                   >
                     <td className="px-5 py-3.5">
@@ -221,7 +230,7 @@ export default function StockTable({ stocks, loading }: Props) {
                     <td className="px-5 py-3.5 text-right">
                       <span className={clsx(
                         "font-bold text-base tabular-nums",
-                        s.is_below_threshold ? "text-red-600" : ratio < 0.6 ? "text-amber-600" : "text-slate-800"
+                        s.is_below_threshold ? "text-red-600" : isWarning ? "text-amber-600" : "text-slate-800"
                       )}>
                         {s.current_stock.toLocaleString("tr-TR", { maximumFractionDigits: 1 })}
                       </span>
@@ -245,9 +254,9 @@ export default function StockTable({ stocks, loading }: Props) {
                           <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
                           Kritik
                         </span>
-                      ) : ratio < 0.6 ? (
+                      ) : isWarning ? (
                         <span className="badge-warning">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                           Dikkat
                         </span>
                       ) : (

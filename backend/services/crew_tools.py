@@ -32,6 +32,13 @@ def get_all_stock_status() -> str:
             stock = db.query(func.sum(models.StockMovement.quantity)) \
                        .filter(models.StockMovement.product_id == p.id).scalar() or 0.0
             ratio = round(stock / p.threshold, 3) if p.threshold > 0 else 999.0
+            is_critical = stock < p.threshold
+            is_warning  = (not is_critical) and ratio < 1.2
+            # Urgency is pre-computed from hard thresholds — agents must not override this.
+            # HIGH:   stock below threshold (ratio < 1.0)
+            # MEDIUM: stock within 20% above threshold (1.0 <= ratio < 1.2)
+            # LOW:    stock comfortably above threshold (ratio >= 1.2)
+            urgency = "HIGH" if is_critical else ("MEDIUM" if is_warning else "LOW")
             result.append({
                 "id": p.id,
                 "name": p.name,
@@ -40,7 +47,9 @@ def get_all_stock_status() -> str:
                 "threshold": p.threshold,
                 "stock_ratio": ratio,
                 "deficit": round(max(0.0, p.threshold - stock), 2),
-                "is_critical": stock < p.threshold,
+                "is_critical": is_critical,
+                "is_warning": is_warning,
+                "urgency": urgency,
             })
         return json.dumps(result, ensure_ascii=False)
     finally:

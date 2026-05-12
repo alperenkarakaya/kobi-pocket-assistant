@@ -1,7 +1,7 @@
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const COOKIE = "kobi_token";
 
-function getToken(): string | null {
+export function getToken(): string | null {
   if (typeof document === "undefined") return null;
   const match = document.cookie.match(new RegExp(`(?:^|; )${COOKIE}=([^;]*)`));
   return match ? decodeURIComponent(match[1]) : null;

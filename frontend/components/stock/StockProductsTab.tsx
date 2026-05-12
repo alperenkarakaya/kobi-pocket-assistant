@@ -4,9 +4,41 @@ import { useState, useRef, useEffect } from "react";
 import { clsx } from "clsx";
 import {
   Plus, Minus, Trash2, Loader2, PackageSearch, PackagePlus,
-  Users, ChevronDown, Check, X, Search,
+  Users, ChevronDown, Check, X, Search, Download,
 } from "lucide-react";
 import type { Product, Supplier } from "./types";
+
+// ── CSV export ─────────────────────────────────────────────────────────────
+
+function exportProductsCSV(products: Product[]) {
+  const headers = ["Ürün Adı", "SKU", "Birim", "Mevcut Stok", "Eşik", "Durum", "Tedarikçi"];
+  const data = products.map(p => {
+    const ratio = p.threshold > 0 ? p.current_stock / p.threshold : 1;
+    const status = p.is_below_threshold ? "Kritik" : ratio < 1.2 ? "Dikkat" : "Normal";
+    return [
+      p.name,
+      p.sku,
+      p.unit,
+      p.current_stock.toString().replace(".", ","),
+      p.threshold.toString().replace(".", ","),
+      status,
+      p.supplier?.name ?? "",
+    ];
+  });
+
+  const bom = "﻿";
+  const csv = bom + [headers, ...data]
+    .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(";"))
+    .join("\n");
+
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `stok-envanteri-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 // ── Stock bar ──────────────────────────────────────────────────────────────
 
@@ -16,7 +48,8 @@ function StockBar({ current, threshold }: { current: number; threshold: number }
   const thPct = Math.min((threshold / max) * 100, 100);
   const ratio = threshold > 0 ? current / threshold : 1;
   const isCritical = threshold > 0 && current < threshold;
-  const color = isCritical ? "bg-red-500" : ratio < 0.6 ? "bg-amber-400" : "bg-gsuccess-500";
+  const isWarning  = !isCritical && ratio < 1.2;
+  const color = isCritical ? "bg-red-500" : isWarning ? "bg-amber-400" : "bg-gsuccess-500";
   return (
     <div className="relative h-2 bg-slate-100 rounded-full w-24 overflow-visible">
       <div className={clsx("absolute left-0 top-0 h-full rounded-full transition-all duration-500", color)} style={{ width: `${pct}%` }} />
@@ -210,8 +243,8 @@ export default function StockProductsTab({
     const matchesStatus   =
       statusFilter === "all" ||
       (statusFilter === "critical"  && p.is_below_threshold) ||
-      (statusFilter === "warning"   && !p.is_below_threshold && ratio < 0.6) ||
-      (statusFilter === "normal"    && !p.is_below_threshold && ratio >= 0.6);
+      (statusFilter === "warning"   && !p.is_below_threshold && ratio < 1.2) ||
+      (statusFilter === "normal"    && !p.is_below_threshold && ratio >= 1.2);
     const matchesSupplier =
       supplierFilter === "all" ||
       (supplierFilter === "assigned"   && !!p.supplier_id) ||
@@ -224,17 +257,22 @@ export default function StockProductsTab({
       {/* ── Stats cards ───────────────────────────────────────────────── */}
       {!loading && products.length > 0 && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-          {[
-            { label: "Toplam Ürün",       value: products.length,                       color: "text-slate-800"  },
-            { label: "Kritik Stok",       value: critical,                              color: critical > 0 ? "text-red-600" : "text-slate-800" },
-            { label: "Normal",            value: products.length - critical,            color: "text-brand-600"  },
-            { label: "Tedarikçi Atanmış", value: `${assignedCount}/${products.length}`, color: assignedCount === products.length ? "text-brand-600" : "text-amber-600" },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="card p-4 text-center">
-              <p className={clsx("text-2xl font-bold", color)}>{value}</p>
-              <p className="text-xs text-slate-500 mt-0.5">{label}</p>
-            </div>
-          ))}
+          {(() => {
+            const warning = products.filter(p => !p.is_below_threshold && p.threshold > 0 && p.current_stock / p.threshold < 1.2).length;
+            const normal  = products.length - critical - warning;
+            const cards = [
+              { label: "Toplam Ürün",       value: products.length,                        color: "text-slate-800"  },
+              { label: "Kritik Stok",       value: critical,                               color: critical > 0 ? "text-red-600" : "text-slate-800" },
+              { label: "Dikkat / Normal",   value: `${warning} / ${normal}`,              color: warning > 0 ? "text-amber-600" : "text-brand-600" },
+              { label: "Tedarikçi Atanmış", value: `${assignedCount}/${products.length}`,  color: assignedCount === products.length ? "text-brand-600" : "text-amber-600" },
+            ];
+            return cards.map(({ label, value, color }) => (
+              <div key={label} className="card p-4 text-center">
+                <p className={clsx("text-2xl font-bold", color)}>{value}</p>
+                <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+              </div>
+            ));
+          })()}
         </div>
       )}
 
@@ -255,14 +293,24 @@ export default function StockProductsTab({
       ) : (
         <div className="card overflow-hidden">
           {/* Card header */}
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-white">
-            <h2 className="section-title">Ürün Kataloğu</h2>
-            {critical > 0 && (
-              <span className="badge-critical">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                {critical} kritik ürün
-              </span>
-            )}
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-white gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <h2 className="section-title">Ürün Kataloğu</h2>
+              {critical > 0 && (
+                <span className="badge-critical">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                  {critical} kritik ürün
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => exportProductsCSV(filteredProducts)}
+              disabled={filteredProducts.length === 0}
+              className="btn-secondary text-xs gap-1.5 disabled:opacity-40"
+            >
+              <Download size={13} />
+              CSV İndir
+            </button>
           </div>
 
           {/* Filters */}
@@ -323,8 +371,12 @@ export default function StockProductsTab({
               <tbody className="divide-y divide-slate-100 bg-white">
                 {filteredProducts.map(p => {
                   const ratio = p.threshold > 0 ? p.current_stock / p.threshold : 1;
+                  const isWarning = !p.is_below_threshold && ratio < 1.2;
                   return (
-                    <tr key={p.id} className={clsx("transition-colors hover:bg-slate-50/80", p.is_below_threshold && "bg-red-50/30")}>
+                    <tr key={p.id} className={clsx(
+                      "transition-colors hover:bg-slate-50/80",
+                      p.is_below_threshold ? "bg-red-50/30" : isWarning && "bg-amber-50/30"
+                    )}>
                       {/* Name */}
                       <td className="px-4 py-3.5">
                         <p className="font-semibold text-slate-800">{p.name}</p>
@@ -333,11 +385,11 @@ export default function StockProductsTab({
                       {/* Bar */}
                       <td className="px-4 py-3.5 hidden lg:table-cell w-36">
                         <StockBar current={p.current_stock} threshold={p.threshold} />
-                        <p className="text-[10px] text-slate-400 mt-1">{Math.round(Math.min(ratio * 100, 100))}% dolu</p>
+                        <p className="text-[10px] text-slate-400 mt-1">{Math.round(ratio * 100)}% dolu</p>
                       </td>
                       {/* Current */}
                       <td className="px-4 py-3.5 text-right">
-                        <span className={clsx("font-bold text-base tabular-nums", p.is_below_threshold ? "text-red-600" : ratio < 0.6 ? "text-amber-600" : "text-slate-800")}>
+                        <span className={clsx("font-bold text-base tabular-nums", p.is_below_threshold ? "text-red-600" : isWarning ? "text-amber-600" : "text-slate-800")}>
                           {p.current_stock.toLocaleString("tr-TR", { maximumFractionDigits: 1 })}
                         </span>
                         <span className="text-xs text-slate-400 ml-1">{p.unit}</span>
@@ -359,8 +411,8 @@ export default function StockProductsTab({
                       <td className="px-4 py-3.5 text-right">
                         {p.is_below_threshold ? (
                           <span className="badge-critical"><span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />Kritik</span>
-                        ) : ratio < 0.6 ? (
-                          <span className="badge-warning"><span className="w-1.5 h-1.5 rounded-full bg-amber-500" />Dikkat</span>
+                        ) : isWarning ? (
+                          <span className="badge-warning"><span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />Dikkat</span>
                         ) : (
                           <span className="badge-ok"><span className="w-1.5 h-1.5 rounded-full bg-gsuccess-500" />Normal</span>
                         )}

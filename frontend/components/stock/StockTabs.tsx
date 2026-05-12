@@ -1,10 +1,11 @@
 import { clsx } from "clsx";
-import { Package, BarChart2 } from "lucide-react";
+import { Package, BarChart2, History } from "lucide-react";
 import type { ActiveTab } from "./types";
 
 const TABS = [
-  { key: "products",  label: "Ürünler",          icon: Package  },
+  { key: "products",  label: "Ürünler",           icon: Package  },
   { key: "analytics", label: "Analiz & Metrikler", icon: BarChart2 },
+  { key: "history",   label: "Hareket Geçmişi",   icon: History  },
 ] as const;
 
 interface StockTabsProps {

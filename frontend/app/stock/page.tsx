@@ -7,8 +7,9 @@ import { apiFetch } from "@/lib/auth";
 import StockTabs from "@/components/stock/StockTabs";
 import StockProductsTab from "@/components/stock/StockProductsTab";
 import StockAnalyticsTab from "@/components/stock/StockAnalyticsTab";
+import StockHistoryTab from "@/components/stock/StockHistoryTab";
 import { NewProductModal, AddStockModal, RemoveStockModal, DeleteModal } from "@/components/stock/StockModals";
-import type { Product, Supplier, TrendItem, Modal, ActiveTab, AnalyticsHistory } from "@/components/stock/types";
+import type { Product, Supplier, TrendItem, Modal, ActiveTab, AnalyticsHistory, StockMovementRow } from "@/components/stock/types";
 
 export default function StockPage() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -17,6 +18,9 @@ export default function StockPage() {
   const [history, setHistory] = useState<AnalyticsHistory>([]);
   const [loading, setLoading] = useState(true);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
+  const [movements, setMovements] = useState<StockMovementRow[]>([]);
+  const [movementsLoading, setMovementsLoading] = useState(false);
+  const [movementsFetched, setMovementsFetched] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("products");
   const [activeModal, setActiveModal] = useState<Modal>(null);
   const [target, setTarget] = useState<Product | null>(null);
@@ -55,6 +59,21 @@ export default function StockPage() {
       setAnalyticsLoading(false);
     });
   }, []);
+
+  const handleTabChange = (tab: ActiveTab) => {
+    setActiveTab(tab);
+    if (tab === "history" && !movementsFetched) {
+      setMovementsLoading(true);
+      apiFetch("/api/stock/movements")
+        .then(r => r.ok ? r.json() : [])
+        .then((rows: StockMovementRow[]) => {
+          setMovements(rows);
+          setMovementsFetched(true);
+        })
+        .catch(() => setMovements([]))
+        .finally(() => setMovementsLoading(false));
+    }
+  };
 
   const closeModal = () => {
     setActiveModal(null);
@@ -191,7 +210,8 @@ export default function StockPage() {
     toast.success(supplierId ? `Tedarikçi atandı: ${updated.supplier?.name}` : "Tedarikçi bağlantısı kaldırıldı.");
   };
 
-  const critical = products.filter(p => p.is_below_threshold).length;
+  const critical     = products.filter(p => p.is_below_threshold).length;
+  const warning      = products.filter(p => !p.is_below_threshold && p.threshold > 0 && p.current_stock / p.threshold < 1.2).length;
   const assignedCount = products.filter(p => p.supplier_id).length;
 
   return (
@@ -201,7 +221,7 @@ export default function StockPage() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Stok Yönetimi</h1>
             <p className="text-slate-500 text-sm mt-1">
-              {loading ? "Yükleniyor..." : `${products.length} ürün · ${critical > 0 ? `${critical} kritik` : "tüm stoklar normal"}`}
+              {loading ? "Yükleniyor..." : `${products.length} ürün${critical > 0 ? ` · ${critical} kritik` : ""}${warning > 0 ? ` · ${warning} dikkat` : ""}${critical === 0 && warning === 0 ? " · tüm stoklar normal" : ""}`}
             </p>
           </div>
           <button onClick={() => openModal("new-product")} className="btn-primary">
@@ -210,9 +230,9 @@ export default function StockPage() {
           </button>
         </div>
 
-        <StockTabs activeTab={activeTab} onChange={setActiveTab} />
+        <StockTabs activeTab={activeTab} onChange={handleTabChange} />
 
-        {activeTab === "products" ? (
+        {activeTab === "products" && (
           <StockProductsTab
             products={products}
             suppliers={suppliers}
@@ -225,8 +245,12 @@ export default function StockPage() {
             onOpenRemoveStock={(product) => openModal("remove-stock", product)}
             onOpenDelete={(product) => openModal("delete", product)}
           />
-        ) : (
+        )}
+        {activeTab === "analytics" && (
           <StockAnalyticsTab loading={analyticsLoading} trends={trends} history={history} />
+        )}
+        {activeTab === "history" && (
+          <StockHistoryTab movements={movements} loading={movementsLoading} />
         )}
       </div>
 

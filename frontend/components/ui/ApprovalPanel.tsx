@@ -390,23 +390,21 @@ function ApprovalCard({
 
 // ── Panel ──────────────────────────────────────────────────────────────────
 
+const VISIBLE_DEFAULT = 2;
+
 export default function ApprovalPanel({ approvals, loading, onApprove, onReject }: Props) {
-  const hasCrewResults = approvals.some(
-    (a) => (a.payload as EmailPayload)?.generated_by === "crewai_v1"
-  );
+  const [expanded, setExpanded] = useState(false);
+
+  const visible    = expanded ? approvals : approvals.slice(0, VISIBLE_DEFAULT);
+  const hiddenCount = approvals.length - VISIBLE_DEFAULT;
 
   return (
     <div className="card overflow-hidden flex flex-col h-fit">
       {/* Header */}
       <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {hasCrewResults
-            ? <Bot size={16} className="text-brand-600" />
-            : <Mail size={16} className="text-brand-600" />
-          }
-          <h2 className="section-title">
-            {hasCrewResults ? "AI Crew Analizi" : "Onay Bekleyenler"}
-          </h2>
+          <Mail size={16} className="text-brand-600" />
+          <h2 className="section-title">Mail Önerileri</h2>
         </div>
 
         {approvals.length > 0 && (
@@ -428,17 +426,44 @@ export default function ApprovalPanel({ approvals, loading, onApprove, onReject 
         ) : approvals.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-slate-400">
             <Inbox size={32} strokeWidth={1.5} className="mb-3 text-slate-300" />
-            <p className="text-sm font-medium text-slate-500">Bekleyen onay yok</p>
+            <p className="text-sm font-medium text-slate-500">Bekleyen öneri yok</p>
             <p className="text-xs text-slate-400 mt-1 text-center">
               AI Crew analizi başlatın veya stok kritik seviyeye düşmesini bekleyin
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {approvals.map((a) => (
-              <ApprovalCard key={a.id} approval={a} onApprove={onApprove} onReject={onReject} />
-            ))}
-          </div>
+          <>
+            <div className="space-y-3">
+              {visible.map((a) => (
+                <ApprovalCard key={a.id} approval={a} onApprove={onApprove} onReject={onReject} />
+              ))}
+            </div>
+
+            {hiddenCount > 0 && (
+              <button
+                onClick={() => setExpanded(v => !v)}
+                className="mt-3 w-full flex items-center justify-center gap-1.5
+                           text-xs font-medium text-slate-500 hover:text-brand-600
+                           py-2.5 rounded-lg border border-dashed border-slate-200
+                           hover:border-brand-300 hover:bg-brand-50 transition-colors"
+              >
+                {expanded ? (
+                  <>
+                    <ChevronUp size={13} />
+                    Daha az göster
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown size={13} />
+                    Daha fazlası için tıklayınız
+                    <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-semibold">
+                      +{hiddenCount}
+                    </span>
+                  </>
+                )}
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

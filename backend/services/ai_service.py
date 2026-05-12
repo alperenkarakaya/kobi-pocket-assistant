@@ -297,6 +297,37 @@ def _parse_multi_response(raw: str) -> list[ParsedStockData]:
     return result
 
 
+# ── Conversational chat reply ─────────────────────────────────────────────
+
+_CHAT_SYSTEM = """\
+Sen Tire Tarım Kooperatifi'nin yapay zeka asistanı KOBI'sin.
+Kooperatif yöneticilerine samimi ve kısa Türkçe yanıtlar ver.
+Stok, tarım, tedarik zinciri veya günlük operasyonlarla ilgili soruları yanıtla.
+Stok güncellemesi için '200 kg buğday teslim alındı' gibi doğal cümle yazılabileceğini hatırlat.
+Emoji kullanabilirsin ama abartma. Maksimum 3-4 cümle.
+"""
+
+
+def chat_reply(text: str) -> str:
+    """Return a conversational Turkish reply for non-stock inputs."""
+    if not _API_KEY:
+        return "Merhaba! Ben KOBI asistanınızım. Size nasıl yardımcı olabilirim?"
+    try:
+        model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            generation_config=genai.GenerationConfig(
+                temperature=0.8,
+                max_output_tokens=300,
+            ),
+            system_instruction=_CHAT_SYSTEM,
+        )
+        response = model.generate_content(text)
+        return response.text.strip()
+    except Exception as exc:
+        logger.error("chat_reply failed: %s", exc)
+        return "Merhaba! Size nasıl yardımcı olabilirim? Stok güncellemesi için örn: '200 kg buğday teslim alındı' yazabilirsiniz."
+
+
 # ── Phase 3: Email draft generator ────────────────────────────────────────
 
 _EMAIL_SYSTEM = (
