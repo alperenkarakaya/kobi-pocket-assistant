@@ -14,3 +14,4 @@ litellm
 starlette
 python-telegram-bot
 twilio
+python-jose[cryptography]

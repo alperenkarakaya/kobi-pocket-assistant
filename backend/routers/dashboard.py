@@ -65,7 +65,7 @@ def get_dashboard(db: Session = Depends(get_db)):
             alert=below_threshold_count > 0,
         ),
         schemas.KpiCard(
-            label="Onay Bekleyen",
+            label="E-posta Onayı Bekleyen",
             value=len(pending_approvals),
             alert=len(pending_approvals) > 0,
         ),
@@ -96,11 +96,16 @@ def get_dashboard(db: Session = Depends(get_db)):
 
 
 def _count_todays_movements(db: Session) -> int:
-    from sqlalchemy import cast, Date
-    from datetime import date
-
+    # Timestamps are stored as UTC (SQLite func.now() defaults to UTC) — compare
+    # against UTC date to avoid the local-vs-UTC off-by-hours mismatch that
+    # silently mis-counted movements near midnight.
+    today_utc_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_utc_start = today_utc_start + timedelta(days=1)
     return (
         db.query(models.StockMovement)
-        .filter(cast(models.StockMovement.timestamp, Date) == date.today())
+        .filter(
+            models.StockMovement.timestamp >= today_utc_start,
+            models.StockMovement.timestamp < tomorrow_utc_start,
+        )
         .count()
     )

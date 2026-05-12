@@ -6,8 +6,7 @@ import {
   AlertTriangle, Info, Ban, RefreshCw,
 } from "lucide-react";
 import { clsx } from "clsx";
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { apiFetch } from "@/lib/auth";
 
 interface Notification {
   id: number;
@@ -19,7 +18,7 @@ interface Notification {
 }
 
 const TYPE_CONFIG: Record<string, { icon: React.ElementType; color: string; bg: string }> = {
-  stock_update: { icon: Package,       color: "text-brand-600",  bg: "bg-brand-50"  },
+  stock_update: { icon: Package,       color: "text-gsuccess-600", bg: "bg-gsuccess-50" },
   email_sent:   { icon: Mail,          color: "text-blue-600",   bg: "bg-blue-50"   },
   ai_analysis:  { icon: Brain,         color: "text-purple-600", bg: "bg-purple-50" },
   alert:        { icon: AlertTriangle, color: "text-red-600",    bg: "bg-red-50"    },
@@ -43,7 +42,7 @@ export default function NotificationBar() {
 
   const fetchNotifications = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/notifications`);
+      const res = await apiFetch("/api/notifications");
       if (!res.ok) return;
       const data: Notification[] = await res.json();
       setNotifications(data);
@@ -77,7 +76,7 @@ export default function NotificationBar() {
 
   const handleMarkAllRead = async () => {
     try {
-      await fetch(`${API}/api/notifications/read-all`, { method: "PATCH" });
+      await apiFetch("/api/notifications/read-all", { method: "PATCH" });
       setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
       setUnread(0);
     } catch {

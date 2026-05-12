@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, KanbanSquare, PackageSearch, Leaf, Users } from "lucide-react";
+import { LayoutDashboard, KanbanSquare, PackageSearch, Leaf, Users, LogOut } from "lucide-react";
 import { clsx } from "clsx";
 import NotificationBar from "./NotificationBar";
+import { logout } from "@/lib/auth";
 
 const NAV = [
   { href: "/",           label: "Özet Pano",     icon: LayoutDashboard },
@@ -66,6 +67,15 @@ export default function Navigation() {
             <span className="w-1.5 h-1.5 rounded-full bg-brand-500 animate-pulse" />
             Canlı
           </span>
+
+          {/* Logout */}
+          <button
+            onClick={logout}
+            title="Çıkış Yap"
+            className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+          >
+            <LogOut size={16} strokeWidth={1.8} />
+          </button>
         </div>
       </div>
     </nav>

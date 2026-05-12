@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { Loader2, BarChart3, CalendarClock, TrendingDown, AlertOctagon, Activity } from "lucide-react";
+import { Loader2, BarChart3, CalendarClock, TrendingUp, TrendingDown, AlertOctagon } from "lucide-react";
 import { DaysToEmptyChart, WeeklyFlowChart } from "@/components/ui/StockCharts";
 import type { AnalyticsHistory, TrendItem } from "./types";
 
@@ -23,8 +23,8 @@ export default function StockAnalyticsTab({ loading, trends, history }: StockAna
     .sort((a, b) => b.daily_avg_consumption - a.daily_avg_consumption)
     .slice(0, 5);
 
-  const totalIn7d = trends.reduce((sum, t) => sum + t.total_in_7d, 0);
-  const totalOut7d = trends.reduce((sum, t) => sum + t.total_out_7d, 0);
+  const productsWithIn7d = trends.filter(t => t.total_in_7d > 0).length;
+  const productsWithOut7d = trends.filter(t => t.total_out_7d > 0).length;
   const totalMoves7d = trends.reduce((sum, t) => sum + t.movement_count_7d, 0);
 
   if (loading) {
@@ -39,7 +39,7 @@ export default function StockAnalyticsTab({ loading, trends, history }: StockAna
   if (trends.length === 0) {
     return (
       <div className="card py-12 text-center text-slate-500 text-sm">
-        Analiz icin yeterli stok hareketi bulunamadi.
+        Analiz için yeterli stok hareketi bulunamadı.
       </div>
     );
   }
@@ -48,8 +48,8 @@ export default function StockAnalyticsTab({ loading, trends, history }: StockAna
     <div className="space-y-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          { label: "7 Gunde Giris", value: totalIn7d.toLocaleString("tr-TR", { maximumFractionDigits: 1 }), icon: TrendingDown, color: "text-emerald-600 bg-emerald-50" },
-          { label: "7 Gunde Cikis", value: totalOut7d.toLocaleString("tr-TR", { maximumFractionDigits: 1 }), icon: Activity, color: "text-amber-600 bg-amber-50" },
+          { label: "7 Günde Giriş Olan Ürün", value: productsWithIn7d, icon: TrendingUp, color: "text-gsuccess-600 bg-gsuccess-50" },
+          { label: "7 Günde Çıkış Olan Ürün", value: productsWithOut7d, icon: TrendingDown, color: "text-amber-600 bg-amber-50" },
           { label: "Kritik Risk", value: topRisk.filter(x => x.is_critical).length, icon: AlertOctagon, color: "text-red-600 bg-red-50" },
           { label: "Toplam Hareket", value: totalMoves7d, icon: BarChart3, color: "text-brand-600 bg-brand-50" },
         ].map(({ label, value, icon: Icon, color }) => (
@@ -70,7 +70,7 @@ export default function StockAnalyticsTab({ loading, trends, history }: StockAna
           <div className="px-5 py-4 border-b border-slate-100">
             <div className="flex items-center gap-2">
               <CalendarClock size={15} className="text-brand-600" />
-              <h2 className="section-title">Tahmini Stok Omru</h2>
+              <h2 className="section-title">Tahmini Stok Ömrü</h2>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">Mevcut tuketim hizina gore tahmin</p>
           </div>
@@ -83,7 +83,7 @@ export default function StockAnalyticsTab({ loading, trends, history }: StockAna
           <div className="px-5 py-4 border-b border-slate-100">
             <div className="flex items-center gap-2">
               <BarChart3 size={15} className="text-brand-600" />
-              <h2 className="section-title">Gunluk Giris / Cikis</h2>
+              <h2 className="section-title">Günlük Giriş / Çıkış</h2>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">Son 7 gunde toplam hareket analizi</p>
           </div>
@@ -95,19 +95,19 @@ export default function StockAnalyticsTab({ loading, trends, history }: StockAna
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <div className="card p-5">
-          <h3 className="text-sm font-semibold text-slate-800 mb-3">En Riskli Urunler</h3>
+          <h3 className="text-sm font-semibold text-slate-800 mb-3">En Riskli Ürünler</h3>
           <div className="space-y-2">
             {topRisk.map(item => (
               <div key={item.product_id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
                 <div>
                   <p className="text-sm font-medium text-slate-700">{item.product_name}</p>
-                  <p className="text-xs text-slate-400">Tuketim: {item.daily_avg_consumption.toFixed(1)} {item.unit}/gun</p>
+                  <p className="text-xs text-slate-400">Tüketim: {item.daily_avg_consumption.toFixed(1)} {item.unit}/gün</p>
                 </div>
                 <span className={clsx(
                   "text-xs font-semibold px-2 py-1 rounded-full",
                   item.is_critical || (item.days_to_empty ?? 999) <= 7 ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-600"
                 )}>
-                  {item.days_to_empty == null ? "Belirsiz" : `${Math.round(item.days_to_empty)} gun`}
+                  {item.days_to_empty == null ? "Belirsiz" : `${Math.round(item.days_to_empty)} gün`}
                 </span>
               </div>
             ))}
@@ -115,14 +115,14 @@ export default function StockAnalyticsTab({ loading, trends, history }: StockAna
         </div>
 
         <div className="card p-5">
-          <h3 className="text-sm font-semibold text-slate-800 mb-3">Tuketim Hizi Liderleri</h3>
+          <h3 className="text-sm font-semibold text-slate-800 mb-3">Tüketim Hızı Liderleri</h3>
           <div className="space-y-2">
             {fastMoving.length === 0 ? (
-              <p className="text-sm text-slate-400">Henuz tuketim verisi yok.</p>
+              <p className="text-sm text-slate-400">Henüz tüketim verisi yok.</p>
             ) : fastMoving.map(item => (
               <div key={item.product_id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
                 <p className="text-sm font-medium text-slate-700">{item.product_name}</p>
-                <p className="text-sm font-semibold text-slate-800">{item.daily_avg_consumption.toFixed(1)} {item.unit}/gun</p>
+                <p className="text-sm font-semibold text-slate-800">{item.daily_avg_consumption.toFixed(1)} {item.unit}/gün</p>
               </div>
             ))}
           </div>

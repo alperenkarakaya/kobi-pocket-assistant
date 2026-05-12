@@ -20,6 +20,7 @@ import base64
 import json
 import logging
 import os
+import threading
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -117,14 +118,31 @@ def _send_outbound_whatsapp(to: str, message: str) -> None:
 
 # ── Background task: auto-run AI Crew when stock goes critical ─────────────
 
-def _auto_crew_and_notify(sender: str, product_name: str) -> None:
+# In-flight tracker to prevent overlapping crew runs (e.g. multi-item invoice
+# fires several triggers within milliseconds). Module-level, single-process.
+_crew_lock = threading.Lock()
+_crew_running = False
+
+
+def _auto_crew_and_notify(sender: str, trigger_label: str) -> None:
     """
-    Triggered in the background when a WhatsApp stock update pushes a product
+    Triggered in the background when a WhatsApp stock update pushes any product
     below its threshold. Runs the full AI Crew pipeline then notifies the sender.
+
+    Coalesces concurrent triggers — if a crew run is already in flight (e.g. a
+    multi-item invoice fired several triggers), later calls return immediately.
+    The single run sees the up-to-date DB state and covers every critical product.
 
     Uses its own DB session — safe to run after the HTTP response is sent.
     """
+    global _crew_running
     from services.crew_service import run_crew
+
+    with _crew_lock:
+        if _crew_running:
+            logger.info("Auto-crew already in flight — skipping duplicate trigger (%s)", trigger_label)
+            return
+        _crew_running = True
 
     db = SessionLocal()
     try:
@@ -140,7 +158,7 @@ def _auto_crew_and_notify(sender: str, product_name: str) -> None:
             except Exception:
                 pass
 
-        logger.info("Auto-crew starting for critical stock after WhatsApp update (%s)", product_name)
+        logger.info("Auto-crew starting for critical stock after WhatsApp update (%s)", trigger_label)
         items = run_crew(db)
 
         created = 0
@@ -159,7 +177,7 @@ def _auto_crew_and_notify(sender: str, product_name: str) -> None:
             _crud.create_notification(
                 db,
                 title=f"🤖 AI Crew: {created} tedarik e-postası hazırlandı",
-                body=f"{product_name} stoku kritik. WhatsApp üzerinden tetiklendi.",
+                body=f"{trigger_label} stoku kritik. WhatsApp üzerinden tetiklendi.",
                 type="ai_analysis",
             )
             db.commit()
@@ -169,7 +187,7 @@ def _auto_crew_and_notify(sender: str, product_name: str) -> None:
                 message=(
                     f"🤖 AI Tedarik Analizi Tamamlandı!\n"
                     f"{'─' * 28}\n"
-                    f"📦 {product_name} stoğu kritik seviyede.\n"
+                    f"📦 Kritik stok tespit edildi.\n"
                     f"✉️  {created} tedarikçi e-posta taslağı hazırlandı.\n\n"
                     f"▶️ Dashboard'dan onaylayıp gönderin:\n{_DASHBOARD_URL}"
                 ),
@@ -186,6 +204,8 @@ def _auto_crew_and_notify(sender: str, product_name: str) -> None:
             pass
     finally:
         db.close()
+        with _crew_lock:
+            _crew_running = False
 
 
 # ── POST /api/webhook/message — direct AI endpoint (Swagger testable) ──────
@@ -225,10 +245,13 @@ async def receive_message(
 
     product = _find_product(db, parsed.product_name)
     if not product:
+        all_products = db.query(models.Product).all()
+        names = ", ".join(p.name for p in all_products[:5]) if all_products else "—"
         return schemas.WebhookMessageResponse(
             status="warning",
             message=(
                 f"⚠️ '{parsed.product_name}' ürünü veritabanında bulunamadı. "
+                f"Kayıtlı ürünler: {names}. "
                 "Lütfen ürünü Stok Yönetimi sayfasından önce ekleyin."
             ),
             parsed=parsed.model_dump(),
@@ -334,6 +357,7 @@ async def receive_whatsapp(
             )
 
         reply_lines = [f"📋 {len(parsed_list)} ürün okundu:\n"]
+        critical_names: list[str] = []
         for parsed in parsed_list:
             product = _find_product(db, parsed.product_name)
             if not product:
@@ -365,7 +389,7 @@ async def receive_whatsapp(
             )
 
             if new_stock < float(product.threshold):
-                background_tasks.add_task(_auto_crew_and_notify, From, product.name)
+                critical_names.append(product.name)
 
             verb = "✅ girdi" if parsed.action == "in" else "📤 çıktı"
             status = ""
@@ -379,6 +403,13 @@ async def receive_whatsapp(
                 f"{verb} {_fmt(parsed.quantity)} {product.unit} {product.name}"
                 f" → {_fmt(new_stock)} {product.unit}{status}"
             )
+
+        # One crew run for the whole invoice — the run sees the final state of
+        # every product it touched and creates approvals for any below threshold.
+        if critical_names:
+            label = ", ".join(critical_names[:3]) + ("…" if len(critical_names) > 3 else "")
+            background_tasks.add_task(_auto_crew_and_notify, From, label)
+            logger.info("Stock critical after photo for %s — single AI Crew queued", label)
 
         return _twiml("\n".join(reply_lines))
 

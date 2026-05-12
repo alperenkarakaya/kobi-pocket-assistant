@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from database import get_db
-import crud, schemas
+import crud, models, schemas
 from services.email_service import send_gmail, SENDER_ADDRESS
 
 logger = logging.getLogger(__name__)
@@ -21,9 +21,16 @@ async def approve_action(
     request: schemas.ApproveActionRequest,
     db: Session = Depends(get_db),
 ):
-    db_action = crud.update_approval_status(db, action_id, schemas.ApprovalStatus.approved)
+    db_action = db.query(models.ActionApproval).filter(
+        models.ActionApproval.id == action_id
+    ).first()
     if not db_action:
         raise HTTPException(status_code=404, detail="Onay kaydı bulunamadı.")
+    if db_action.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Bu kayıt zaten '{db_action.status}' durumunda.",
+        )
 
     payload = json.loads(db_action.payload) if db_action.payload else {}
 
@@ -34,6 +41,7 @@ async def approve_action(
     if request.recipient:
         payload["recipient"] = request.recipient
 
+    # Send email FIRST — only flip status to "approved" if it actually sent.
     if db_action.type == "supply_email":
         recipient = payload.get("recipient") or SENDER_ADDRESS
         subject = payload.get("email_subject", "Tedarik Talebi")
@@ -42,13 +50,6 @@ async def approve_action(
 
         try:
             send_gmail(to=recipient, subject=subject, body=body)
-            crud.create_notification(
-                db,
-                title=f"E-posta gönderildi: {product}",
-                body=f"Alıcı: {recipient} | Konu: {subject}",
-                type="email_sent",
-            )
-            logger.info("Gmail sent for product '%s' → %s", product, recipient)
         except Exception as exc:
             logger.error("Gmail send failed: %s", exc)
             crud.create_notification(
@@ -57,6 +58,24 @@ async def approve_action(
                 body=str(exc),
                 type="alert",
             )
+            raise HTTPException(
+                status_code=502,
+                detail=f"E-posta gönderilemedi: {exc}",
+            )
+
+        crud.create_notification(
+            db,
+            title=f"E-posta gönderildi: {product}",
+            body=f"Alıcı: {recipient} | Konu: {subject}",
+            type="email_sent",
+        )
+        logger.info("Gmail sent for product '%s' → %s", product, recipient)
+
+    # Persist edited overrides + status atomically.
+    db_action.payload = json.dumps(payload)
+    db_action.status = schemas.ApprovalStatus.approved.value
+    db.commit()
+    db.refresh(db_action)
 
     return schemas.ActionApprovalOut(
         id=db_action.id,
@@ -76,17 +95,32 @@ async def reject_action(
     request: schemas.ApproveActionRequest,
     db: Session = Depends(get_db),
 ):
-    db_action = crud.update_approval_status(db, action_id, schemas.ApprovalStatus.rejected)
+    db_action = db.query(models.ActionApproval).filter(
+        models.ActionApproval.id == action_id
+    ).first()
     if not db_action:
         raise HTTPException(status_code=404, detail="Onay kaydı bulunamadı.")
+    if db_action.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Bu kayıt zaten '{db_action.status}' durumunda.",
+        )
 
     payload = json.loads(db_action.payload) if db_action.payload else {}
     product = payload.get("product_name", "Ürün")
 
+    if request.notes:
+        payload["rejection_notes"] = request.notes
+
+    db_action.payload = json.dumps(payload)
+    db_action.status = schemas.ApprovalStatus.rejected.value
+    db.commit()
+    db.refresh(db_action)
+
     crud.create_notification(
         db,
         title=f"Tedarik talebi reddedildi: {product}",
-        body=None,
+        body=request.notes,
         type="rejection",
     )
 

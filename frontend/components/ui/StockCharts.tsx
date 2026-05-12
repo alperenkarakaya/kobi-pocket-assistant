@@ -29,9 +29,9 @@ export interface DailyProduct {
 // ── Colour helpers ──────────────────────────────────────────────────────────
 
 function urgencyColor(days: number) {
-  if (days <= 3) return "#ef4444";
-  if (days <= 7) return "#f59e0b";
-  return "#22c55e";
+  if (days <= 3) return "#d62d20";
+  if (days <= 7) return "#ffa700";
+  return "#008744";
 }
 
 // ── Chart 1 : Days-to-Empty ─────────────────────────────────────────────────
@@ -149,8 +149,8 @@ export function WeeklyFlowChart({ history }: WeeklyFlowProps) {
             </span>
           )}
         />
-        <Bar dataKey="in"  name="in"  fill="#22c55e" radius={[4, 4, 0, 0]} maxBarSize={28} />
-        <Bar dataKey="out" name="out" fill="#f87171" radius={[4, 4, 0, 0]} maxBarSize={28} />
+        <Bar dataKey="in"  name="in"  fill="#008744" radius={[4, 4, 0, 0]} maxBarSize={28} />
+        <Bar dataKey="out" name="out" fill="#d62d20" radius={[4, 4, 0, 0]} maxBarSize={28} />
       </BarChart>
     </ResponsiveContainer>
   );

@@ -67,14 +67,14 @@ const URGENCY = {
   LOW: {
     icon: Info,
     badge: "badge-ok",
-    dot: "bg-emerald-500",
+    dot: "bg-gsuccess-500",
     label: "Düşük",
   },
 } as const;
 
 // ── Agent Insight Strip ────────────────────────────────────────────────────
 
-function AgentInsightStrip({ analysis }: { analysis: AgentAnalysis }) {
+function AgentInsightStrip({ analysis, unit }: { analysis: AgentAnalysis; unit?: string }) {
   const level = (analysis.urgency_level ?? "MEDIUM") as keyof typeof URGENCY;
   const cfg = URGENCY[level];
   const UIcon = cfg.icon;
@@ -95,7 +95,7 @@ function AgentInsightStrip({ analysis }: { analysis: AgentAnalysis }) {
         {analysis.recommended_order_qty !== undefined && (
           <span className="flex items-center gap-1 text-xs text-slate-600 font-medium ml-auto">
             <ShoppingCart size={11} className="text-slate-400" />
-            Öneri: <strong className="text-slate-800 ml-0.5">{analysis.recommended_order_qty} {}</strong>
+            Öneri: <strong className="text-slate-800 ml-0.5">{analysis.recommended_order_qty}{unit ? ` ${unit}` : ""}</strong>
           </span>
         )}
 
@@ -178,7 +178,7 @@ function ApprovalCard({
           "flex-shrink-0 mt-0.5 p-1.5 rounded-lg",
           urgency === "HIGH" ? "bg-red-100 text-red-600" :
           urgency === "MEDIUM" ? "bg-amber-100 text-amber-600" :
-          "bg-emerald-100 text-emerald-600"
+          "bg-gsuccess-100 text-gsuccess-600"
         )}>
           <Mail size={14} />
         </div>
@@ -207,7 +207,7 @@ function ApprovalCard({
         <span className={clsx("flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border",
           urgency === "HIGH" ? "bg-red-100 text-red-700 border-red-200" :
           urgency === "MEDIUM" ? "bg-amber-100 text-amber-700 border-amber-200" :
-          "bg-emerald-100 text-emerald-700 border-emerald-200"
+          "bg-gsuccess-100 text-gsuccess-700 border-gsuccess-200"
         )}>
           <span className={clsx("w-1.5 h-1.5 rounded-full", urgencyCfg.dot)} />
           {p.agent_analysis?.urgency_label ?? urgencyCfg.label}
@@ -217,7 +217,7 @@ function ApprovalCard({
       {/* Agent insight */}
       {p.agent_analysis && (
         <div className="pt-3">
-          <AgentInsightStrip analysis={p.agent_analysis} />
+          <AgentInsightStrip analysis={p.agent_analysis} unit={p.unit} />
         </div>
       )}
 

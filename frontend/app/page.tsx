@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import KpiCard from "@/components/ui/KpiCard";
 import StockTable from "@/components/ui/StockTable";
@@ -10,7 +11,9 @@ import {
   Boxes, AlertTriangle, Clock, Activity,
   Wifi, WifiOff, Sparkles, Loader2, RefreshCw,
   TrendingDown, PackageCheck, BarChart3, CalendarClock,
+  X, Send, MessageSquare, ChevronRight,
 } from "lucide-react";
+import { apiFetch } from "@/lib/auth";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -62,8 +65,126 @@ interface DashboardData {
   pending_approvals: PendingApproval[];
 }
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const KPI_ICONS = [Boxes, AlertTriangle, Clock, Activity];
+
+// ── Critical Alert Banner ──────────────────────────────────────────────────
+
+function CriticalAlertBanner({ stocks }: { stocks: StockLevel[] }) {
+  const [dismissed, setDismissed] = useState(false);
+  const criticals = stocks.filter(s => s.is_below_threshold);
+
+  if (dismissed || criticals.length === 0) return null;
+
+  return (
+    <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-5 py-4 flex items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+      <div className="flex-shrink-0 p-1.5 bg-red-100 rounded-lg">
+        <AlertTriangle size={16} className="text-red-600" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-red-800">
+          {criticals.length} ürün kritik stok seviyesinde
+        </p>
+        <p className="text-xs text-red-600 mt-0.5 truncate">
+          {criticals.slice(0, 4).map(s => s.name).join(" · ")}
+          {criticals.length > 4 && ` +${criticals.length - 4} daha`}
+        </p>
+      </div>
+      <Link
+        href="/stock"
+        className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-red-700 hover:text-red-900 px-3 py-1.5 rounded-lg border border-red-200 hover:bg-red-100 transition-colors flex-shrink-0"
+      >
+        Stok Yönetimine Git
+        <ChevronRight size={12} />
+      </Link>
+      <button
+        onClick={() => setDismissed(true)}
+        className="flex-shrink-0 p-1 text-red-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+        title="Kapat"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
+// ── Quick Stock Entry ──────────────────────────────────────────────────────
+
+interface QuickEntryResponse {
+  status: string;
+  message: string;
+}
+
+function QuickStockEntry({ onSuccess }: { onSuccess: () => void }) {
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<QuickEntryResponse | null>(null);
+
+  const handleSubmit = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || loading) return;
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await apiFetch("/api/webhook/message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: trimmed }),
+      });
+      const data: QuickEntryResponse = await res.json();
+      setResult(data);
+      if (data.status === "success") {
+        setText("");
+        onSuccess();
+      }
+    } catch {
+      setResult({ status: "error", message: "Bağlantı hatası. Tekrar deneyin." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <MessageSquare size={14} className="text-brand-600" />
+        <h3 className="section-title">Hızlı Stok Girişi</h3>
+        <span className="text-xs text-slate-400 ml-auto">AI · doğal dil</span>
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={text}
+          onChange={e => { setText(e.target.value); setResult(null); }}
+          onKeyDown={e => e.key === "Enter" && handleSubmit()}
+          placeholder="örn: 500 kg buğday teslim alındı"
+          className="form-input flex-1 h-10"
+          disabled={loading}
+        />
+        <button
+          onClick={handleSubmit}
+          disabled={!text.trim() || loading}
+          className="btn-primary h-10 px-4"
+          title="Gönder (Enter)"
+        >
+          {loading
+            ? <Loader2 size={15} className="animate-spin" />
+            : <Send size={15} />
+          }
+        </button>
+      </div>
+      {result && (
+        <p className={`text-xs mt-2 font-medium ${
+          result.status === "success" ? "text-gsuccess-700" :
+          result.status === "warning" ? "text-amber-700" : "text-red-600"
+        }`}>
+          {result.message}
+        </p>
+      )}
+      <p className="text-xs text-slate-400 mt-2">
+        WhatsApp&apos;a yazdığınız gibi yazın — AI stok kaydını otomatik oluşturur
+      </p>
+    </div>
+  );
+}
 
 // ── Skeleton ───────────────────────────────────────────────────────────────
 
@@ -91,9 +212,9 @@ export default function DashboardPage() {
   const fetchDashboard = useCallback(async () => {
     try {
       const [dashRes, trendRes, histRes] = await Promise.all([
-        fetch(`${API}/api/dashboard`),
-        fetch(`${API}/api/analytics/trends`),
-        fetch(`${API}/api/analytics/daily-history`),
+        apiFetch("/api/dashboard"),
+        apiFetch("/api/analytics/trends"),
+        apiFetch("/api/analytics/daily-history"),
       ]);
       if (!dashRes.ok) throw new Error("API error");
       const json: DashboardData = await dashRes.json();
@@ -117,9 +238,9 @@ export default function DashboardPage() {
 
   const handleAnalyze = async () => {
     setAnalyzing(true);
-    const toastId = toast.loading("AI Crew analiz yapıyor (~30 saniye)...");
+    const toastId = toast.loading("Tedarik analizi yapılıyor (~30 saniye)...");
     try {
-      const res = await fetch(`${API}/api/analyze-stocks`, { method: "POST" });
+      const res = await apiFetch("/api/analyze-stocks", { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as { detail?: string }).detail ?? "Analiz başarısız");
@@ -129,8 +250,8 @@ export default function DashboardPage() {
       const count = approvals.length;
       toast.success(
         count > 0
-          ? `AI Crew tamamlandı — ${count} kritik ürün için tedarik talebi oluşturuldu.`
-          : "AI Crew tamamlandı — tüm stoklar yeterli seviyede.",
+          ? `Analiz tamamlandı — ${count} kritik ürün için tedarik talebi oluşturuldu.`
+          : "Analiz tamamlandı — tüm stoklar yeterli seviyede.",
         { id: toastId }
       );
     } catch (err: unknown) {
@@ -145,7 +266,7 @@ export default function DashboardPage() {
     const product = (approval.payload.product_name as string) ?? "Ürün";
     const toastId = toast.loading(`${product} için e-posta gönderiliyor...`);
     try {
-      const res = await fetch(`${API}/api/actions/${id}/approve`, {
+      const res = await apiFetch(`/api/actions/${id}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -167,7 +288,7 @@ export default function DashboardPage() {
   const handleReject = async (id: number, approval: PendingApproval) => {
     const product = (approval.payload.product_name as string) ?? "Ürün";
     try {
-      await fetch(`${API}/api/actions/${id}/reject`, {
+      await apiFetch(`/api/actions/${id}/reject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -229,14 +350,20 @@ export default function DashboardPage() {
               onClick={handleAnalyze}
               disabled={analyzing}
               className="btn-primary shadow-sm"
+              title="Kritik stokları analiz eder ve her ürün için tedarikçiye gönderilecek e-posta taslağı hazırlar (~30 sn)."
             >
               {analyzing
-                ? <><Loader2 size={15} className="animate-spin" />Crew çalışıyor...</>
-                : <><Sparkles size={15} />AI Crew Analizi Başlat</>
+                ? <><Loader2 size={15} className="animate-spin" />Analiz yapılıyor...</>
+                : <><Sparkles size={15} />Tedarik Analizi Yap</>
               }
             </button>
           </div>
         </div>
+
+        {/* ── Critical Alert Banner ──────────────────────────────────── */}
+        {!loading && data?.stock_levels && (
+          <CriticalAlertBanner stocks={data.stock_levels} />
+        )}
 
         {/* ── KPI Cards ──────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -260,6 +387,9 @@ export default function DashboardPage() {
           {/* Stock table (2/3) */}
           <div className="xl:col-span-2 space-y-6">
             <StockTable stocks={data?.stock_levels ?? []} loading={loading} />
+
+            {/* Quick stock entry */}
+            <QuickStockEntry onSuccess={fetchDashboard} />
 
             {/* Charts */}
             {!loading && trends.length > 0 && (
@@ -306,14 +436,14 @@ export default function DashboardPage() {
                 {[
                   {
                     icon: PackageCheck,
-                    label: "7 Günde Giren",
-                    value: `${trends.reduce((s, t) => s + t.total_in_7d, 0).toLocaleString("tr-TR", { maximumFractionDigits: 0 })} birim`,
-                    color: "text-brand-600 bg-brand-50",
+                    label: "7 Günde Giriş",
+                    value: `${trends.filter(t => t.total_in_7d > 0).length} ürün`,
+                    color: "text-gsuccess-600 bg-gsuccess-50",
                   },
                   {
                     icon: TrendingDown,
-                    label: "7 Günde Çıkan",
-                    value: `${trends.reduce((s, t) => s + t.total_out_7d, 0).toLocaleString("tr-TR", { maximumFractionDigits: 0 })} birim`,
+                    label: "7 Günde Çıkış",
+                    value: `${trends.filter(t => t.total_out_7d > 0).length} ürün`,
                     color: "text-amber-600 bg-amber-50",
                   },
                   {
@@ -350,7 +480,7 @@ export default function DashboardPage() {
 
         {/* ── Footer ─────────────────────────────────────────────────── */}
         <footer className="mt-12 pt-6 border-t border-slate-200 flex items-center justify-between text-xs text-slate-400">
-          <span>Tire Tarım Kooperatifi · KOBI Tarım Asistanı v3.0</span>
+          <span>Tire Tarım Kooperatifi · KOBI Tarım Asistanı v4.0</span>
           <span>Gemini 2.5 Flash · CrewAI · FastAPI · Next.js</span>
         </footer>
       </div>

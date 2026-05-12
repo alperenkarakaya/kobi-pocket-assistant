@@ -24,10 +24,11 @@ function StockBar({ current, threshold }: { current: number; threshold: number }
   const thPct = Math.min((threshold / max) * 100, 100);
   const ratio = threshold > 0 ? current / threshold : 1;
 
+  const isCritical = threshold > 0 && current < threshold;
   const barColor =
-    ratio < 0.3 ? "bg-red-500" :
+    isCritical ? "bg-red-500" :
     ratio < 0.6 ? "bg-amber-400" :
-    "bg-brand-500";
+    "bg-gsuccess-500";
 
   return (
     <div className="relative h-2 bg-slate-100 rounded-full overflow-visible w-full min-w-[80px]">
@@ -106,7 +107,7 @@ export default function StockTable({ stocks, loading }: Props) {
         <div className="flex flex-col items-center justify-center py-16 text-slate-400">
           <PackageSearch size={36} strokeWidth={1.5} className="mb-3 text-slate-300" />
           <p className="text-sm font-medium text-slate-500">Ürün bulunamadı</p>
-          <p className="text-xs mt-1">Stok Yönetimi sayfasından ürün ekleyin veya seed.py çalıştırın.</p>
+          <p className="text-xs mt-1">Stok Yönetimi sayfasından ilk ürünü ekleyin.</p>
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -156,7 +157,7 @@ export default function StockTable({ stocks, loading }: Props) {
                     <td className="px-5 py-3.5 text-right">
                       <span className={clsx(
                         "font-bold text-base tabular-nums",
-                        ratio < 0.3 ? "text-red-600" : ratio < 0.6 ? "text-amber-600" : "text-slate-800"
+                        s.is_below_threshold ? "text-red-600" : ratio < 0.6 ? "text-amber-600" : "text-slate-800"
                       )}>
                         {s.current_stock.toLocaleString("tr-TR", { maximumFractionDigits: 1 })}
                       </span>
@@ -187,7 +188,7 @@ export default function StockTable({ stocks, loading }: Props) {
                         </span>
                       ) : (
                         <span className="badge-ok">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-gsuccess-500" />
                           Normal
                         </span>
                       )}

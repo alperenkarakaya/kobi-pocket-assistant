@@ -125,7 +125,7 @@ async def send_briefing(bot, chat_id: int) -> None:
         lines.append("")
         if critical:
             lines.append(f"⚠️ *{len(critical)} ürün kritik seviyede!*")
-            lines.append("Dashboard'dan *AI Crew Analizi Başlat*'a tıklayarak tedarik e-postaları oluşturun.")
+            lines.append("Dashboard'dan *Tedarik Analizi Yap*'a tıklayarak tedarik e-postaları oluşturun.")
         elif warning:
             lines.append(f"ℹ️ {len(warning)} ürün eşiğe yaklaşıyor. Takipte kalın.")
         else:
@@ -271,9 +271,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         parsed = ai_service.parse_text(text)
         product = find_product(db, parsed.product_name)
         if not product:
+            all_products = db.query(models.Product).all()
+            names = ", ".join(p.name for p in all_products[:5]) if all_products else "—"
             await update.message.reply_text(
                 f"⚠️ *'{parsed.product_name}'* ürünü bulunamadı.\n"
-                "Lütfen ürünü Dashboard'daki Stok Yönetimi sayfasından ekleyin.",
+                f"Kayıtlı ürünler: {names}\n\n"
+                "Tam ürün adını yazarak tekrar deneyin veya Stok Yönetimi sayfasından ekleyin.",
                 parse_mode="Markdown",
             )
             return
@@ -288,6 +291,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         ))
         db.commit()
 
+        new_stock = (
+            db.query(func.sum(models.StockMovement.quantity))
+            .filter(models.StockMovement.product_id == product.id)
+            .scalar() or 0.0
+        )
+
         # Create notification for Telegram stock update
         import crud as _crud
         verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
@@ -299,8 +308,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
         verb = "stoka eklendi ✅" if parsed.action == "in" else "stoktan düşüldü 📤"
+        status_line = ""
+        if product.threshold > 0:
+            ratio = new_stock / product.threshold
+            if ratio < 0.3:
+                status_line = "\n🔴 *KRİTİK* — eşiğin altında"
+            elif new_stock < product.threshold:
+                status_line = f"\n⚠️ Eşik altı (%{int(ratio * 100)})"
         await update.message.reply_text(
             f"*{parsed.quantity} {product.unit} {product.name}* {verb}\n"
+            f"📦 Yeni stok: *{new_stock:.1f} {product.unit}* / eşik {product.threshold:.0f}"
+            f"{status_line}\n"
             f"_{parsed.reason}_",
             parse_mode="Markdown",
         )
@@ -321,8 +339,11 @@ async def _process_image_bytes(
     parsed = ai_service.parse_image(image_bytes, mime_type)
     product = find_product(db, parsed.product_name)
     if not product:
+        all_products = db.query(models.Product).all()
+        names = ", ".join(p.name for p in all_products[:5]) if all_products else "—"
         await update.message.reply_text(
             f"📄 İrsaliye okundu — ama *'{parsed.product_name}'* bulunamadı.\n"
+            f"Kayıtlı ürünler: {names}\n\n"
             "Lütfen ürünü Stok Yönetimi sayfasından ekleyin.",
             parse_mode="Markdown",
         )
@@ -348,10 +369,25 @@ async def _process_image_bytes(
     )
     db.commit()
 
+    new_stock = (
+        db.query(func.sum(models.StockMovement.quantity))
+        .filter(models.StockMovement.product_id == product.id)
+        .scalar() or 0.0
+    )
+
     verb = "stoka eklendi ✅" if parsed.action == "in" else "stoktan düşüldü 📤"
+    status_line = ""
+    if product.threshold > 0:
+        ratio = new_stock / product.threshold
+        if ratio < 0.3:
+            status_line = "\n🔴 *KRİTİK* — eşiğin altında"
+        elif new_stock < product.threshold:
+            status_line = f"\n⚠️ Eşik altı (%{int(ratio * 100)})"
     await update.message.reply_text(
         f"📄 İrsaliye okundu!\n"
         f"*{parsed.quantity} {product.unit} {product.name}* {verb}\n"
+        f"📦 Yeni stok: *{new_stock:.1f} {product.unit}* / eşik {product.threshold:.0f}"
+        f"{status_line}\n"
         f"_{parsed.reason}_",
         parse_mode="Markdown",
     )

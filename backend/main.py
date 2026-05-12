@@ -3,13 +3,15 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base, SessionLocal
 from routers import dashboard, webhook, actions, tasks, stock, analysis, analytics
 from routers import notifications as notifications_router
 from routers import suppliers as suppliers_router
+from routers import auth as auth_router
+from services.auth_service import require_auth
 import models  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,10 @@ async def _proactive_stock_monitor(telegram_app) -> None:
     import crud
 
     previously_critical: set[int] = set()
+    # First pass establishes baseline silently — we don't know which products
+    # were already critical before the process started, so emitting alerts for
+    # all of them would flood Telegram + notifications on every restart.
+    is_first_run = True
     await asyncio.sleep(60)  # let DB initialize before first check
 
     while True:
@@ -70,10 +76,11 @@ async def _proactive_stock_monitor(telegram_app) -> None:
                 )
                 if p.threshold > 0 and stock < p.threshold:
                     now_critical.add(p.id)
-                    if p.id not in previously_critical:
+                    if not is_first_run and p.id not in previously_critical:
                         newly_critical.append((p.name, stock, p.threshold, p.unit))
 
             previously_critical = now_critical
+            is_first_run = False
 
             for name, stock, threshold, unit in newly_critical:
                 pct = int(stock / threshold * 100) if threshold > 0 else 0
@@ -89,7 +96,7 @@ async def _proactive_stock_monitor(telegram_app) -> None:
                 lines = ["🚨 *Stok Uyarısı!*\n"]
                 for name, stock, threshold, unit in newly_critical:
                     lines.append(f"• *{name}*: {stock:.0f}/{threshold:.0f} {unit}")
-                lines.append("\nDashboard'dan *AI Crew Analizi* başlatabilirsiniz.")
+                lines.append("\nDashboard'dan *Tedarik Analizi* başlatabilirsiniz.")
                 msg = "\n".join(lines)
 
                 for chat_id in chat_ids:
@@ -173,15 +180,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(dashboard.router, prefix="/api")
-app.include_router(webhook.router, prefix="/api")
-app.include_router(actions.router, prefix="/api")
-app.include_router(tasks.router, prefix="/api")
-app.include_router(stock.router, prefix="/api")
-app.include_router(analysis.router, prefix="/api")
-app.include_router(analytics.router, prefix="/api")
-app.include_router(notifications_router.router, prefix="/api")
-app.include_router(suppliers_router.router, prefix="/api")
+_auth_dep = [Depends(require_auth)]
+
+app.include_router(auth_router.router, prefix="/api")  # public — no auth
+app.include_router(webhook.router, prefix="/api")       # public — called by Twilio/WhatsApp/Telegram
+app.include_router(dashboard.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(actions.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(tasks.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(stock.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(analysis.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(analytics.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(notifications_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(suppliers_router.router, prefix="/api", dependencies=_auth_dep)
 
 
 @app.get("/", tags=["Health"])

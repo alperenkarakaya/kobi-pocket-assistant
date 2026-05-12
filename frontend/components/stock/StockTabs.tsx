@@ -10,7 +10,7 @@ export default function StockTabs({ activeTab, onChange }: StockTabsProps) {
   return (
     <div className="mb-6 inline-flex rounded-lg border border-slate-200 bg-white p-1">
       {[
-        { key: "products", label: "Urunler" },
+        { key: "products", label: "Ürünler" },
         { key: "analytics", label: "Analiz & Metrikler" },
       ].map(tab => (
         <button
