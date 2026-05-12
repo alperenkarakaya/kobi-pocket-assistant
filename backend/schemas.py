@@ -222,3 +222,9 @@ class WebhookMessageResponse(BaseModel):
 
 class AssignSupplierRequest(BaseModel):
     supplier_id: Optional[int] = None  # null to unassign
+
+
+# ── Email tone regeneration ────────────────────────────────────────────────
+
+class RegenerateEmailRequest(BaseModel):
+    tone: str = "formal"  # urgent | formal | friendly

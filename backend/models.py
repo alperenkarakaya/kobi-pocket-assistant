@@ -91,3 +91,12 @@ class Supplier(Base):
     product_category = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class TelegramChat(Base):
+    """Registered Telegram chats for morning briefings and stock alerts."""
+    __tablename__ = "telegram_chats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    chat_id = Column(Integer, unique=True, nullable=False, index=True)
+    registered_at = Column(DateTime(timezone=True), server_default=func.now())

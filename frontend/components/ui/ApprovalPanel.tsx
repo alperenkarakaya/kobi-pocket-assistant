@@ -4,10 +4,12 @@ import { useState } from "react";
 import {
   CheckCircle, XCircle, Mail, Inbox, ChevronDown, ChevronUp,
   Package, Loader2, Pencil, X, Bot, TrendingDown, ShoppingCart,
-  AlertTriangle, AlertCircle, Info,
+  AlertTriangle, AlertCircle, Info, RefreshCw, Zap, Briefcase, Smile,
 } from "lucide-react";
 import { clsx } from "clsx";
 import type { PendingApproval } from "@/app/page";
+
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -52,29 +54,22 @@ interface Props {
 // ── Urgency config ─────────────────────────────────────────────────────────
 
 const URGENCY = {
-  HIGH: {
-    icon: AlertTriangle,
-    badge: "badge-critical",
-    dot: "bg-red-500",
-    label: "Kritik",
-  },
-  MEDIUM: {
-    icon: AlertCircle,
-    badge: "badge-warning",
-    dot: "bg-amber-500",
-    label: "Orta",
-  },
-  LOW: {
-    icon: Info,
-    badge: "badge-ok",
-    dot: "bg-emerald-500",
-    label: "Düşük",
-  },
+  HIGH:   { icon: AlertTriangle, badge: "badge-critical", dot: "bg-red-500",     label: "Kritik"  },
+  MEDIUM: { icon: AlertCircle,   badge: "badge-warning",  dot: "bg-amber-500",   label: "Orta"    },
+  LOW:    { icon: Info,          badge: "badge-ok",        dot: "bg-emerald-500", label: "Düşük"   },
 } as const;
+
+// ── Tone options ───────────────────────────────────────────────────────────
+
+const TONES = [
+  { key: "urgent",   label: "Acil",   icon: Zap,       desc: "Baskılayıcı, hızlı yanıt talep eder" },
+  { key: "formal",   label: "Resmi",  icon: Briefcase, desc: "Kurumsal, standart iş dili"           },
+  { key: "friendly", label: "Samimi", icon: Smile,     desc: "Sıcak ama profesyonel"                },
+] as const;
 
 // ── Agent Insight Strip ────────────────────────────────────────────────────
 
-function AgentInsightStrip({ analysis }: { analysis: AgentAnalysis }) {
+function AgentInsightStrip({ analysis, unit }: { analysis: AgentAnalysis; unit?: string }) {
   const level = (analysis.urgency_level ?? "MEDIUM") as keyof typeof URGENCY;
   const cfg = URGENCY[level];
   const UIcon = cfg.icon;
@@ -95,14 +90,14 @@ function AgentInsightStrip({ analysis }: { analysis: AgentAnalysis }) {
         {analysis.recommended_order_qty !== undefined && (
           <span className="flex items-center gap-1 text-xs text-slate-600 font-medium ml-auto">
             <ShoppingCart size={11} className="text-slate-400" />
-            Öneri: <strong className="text-slate-800 ml-0.5">{analysis.recommended_order_qty} {}</strong>
+            Öneri: <strong className="text-slate-800 ml-0.5">{analysis.recommended_order_qty} {unit ?? ""}</strong>
           </span>
         )}
 
         {analysis.stock_ratio !== undefined && (
           <span className="flex items-center gap-1 text-xs text-slate-400 font-mono">
             <TrendingDown size={10} />
-            {Math.round(analysis.stock_ratio * 100)}% dolu
+            {Math.round((analysis.stock_ratio ?? 0) * 100)}% dolu
           </span>
         )}
       </div>
@@ -133,10 +128,12 @@ function ApprovalCard({
   const initBody      = p.email_body    ?? p.body      ?? "";
   const initRecipient = p.recipient     ?? "tedarikci@example.com";
 
-  const [expanded,  setExpanded]  = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [approving, setApproving] = useState(false);
-  const [rejecting, setRejecting] = useState(false);
+  const [expanded,      setExpanded]      = useState(false);
+  const [isEditing,     setIsEditing]     = useState(false);
+  const [approving,     setApproving]     = useState(false);
+  const [rejecting,     setRejecting]     = useState(false);
+  const [regenerating,  setRegenerating]  = useState(false);
+  const [showTones,     setShowTones]     = useState(false);
 
   const [draftSubject,   setDraftSubject]   = useState(initSubject);
   const [draftBody,      setDraftBody]      = useState(initBody);
@@ -164,21 +161,43 @@ function ApprovalCard({
     try { await onReject(approval.id, approval); } finally { setRejecting(false); }
   };
 
+  const handleRegenerate = async (tone: string) => {
+    setShowTones(false);
+    setRegenerating(true);
+    if (!expanded) setExpanded(true);
+    try {
+      const res = await fetch(`${API}/api/actions/${approval.id}/regenerate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tone }),
+      });
+      if (!res.ok) throw new Error("Yeniden yazma başarısız");
+      const data: { subject: string; body: string } = await res.json();
+      setDraftSubject(data.subject);
+      setDraftBody(data.body);
+      setIsEditing(false);
+    } catch {
+      // silently ignore — user can retry
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
 
       {/* Card header */}
       <div className={clsx(
         "px-4 py-3 border-b flex items-start gap-3",
-        urgency === "HIGH" ? "bg-red-50 border-red-100" :
+        urgency === "HIGH"   ? "bg-red-50 border-red-100" :
         urgency === "MEDIUM" ? "bg-amber-50 border-amber-100" :
-        "bg-slate-50 border-slate-100"
+                               "bg-slate-50 border-slate-100"
       )}>
         <div className={clsx(
           "flex-shrink-0 mt-0.5 p-1.5 rounded-lg",
-          urgency === "HIGH" ? "bg-red-100 text-red-600" :
+          urgency === "HIGH"   ? "bg-red-100 text-red-600" :
           urgency === "MEDIUM" ? "bg-amber-100 text-amber-600" :
-          "bg-emerald-100 text-emerald-600"
+                                 "bg-emerald-100 text-emerald-600"
         )}>
           <Mail size={14} />
         </div>
@@ -205,9 +224,9 @@ function ApprovalCard({
         </div>
 
         <span className={clsx("flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border",
-          urgency === "HIGH" ? "bg-red-100 text-red-700 border-red-200" :
+          urgency === "HIGH"   ? "bg-red-100 text-red-700 border-red-200" :
           urgency === "MEDIUM" ? "bg-amber-100 text-amber-700 border-amber-200" :
-          "bg-emerald-100 text-emerald-700 border-emerald-200"
+                                 "bg-emerald-100 text-emerald-700 border-emerald-200"
         )}>
           <span className={clsx("w-1.5 h-1.5 rounded-full", urgencyCfg.dot)} />
           {p.agent_analysis?.urgency_label ?? urgencyCfg.label}
@@ -217,7 +236,7 @@ function ApprovalCard({
       {/* Agent insight */}
       {p.agent_analysis && (
         <div className="pt-3">
-          <AgentInsightStrip analysis={p.agent_analysis} />
+          <AgentInsightStrip analysis={p.agent_analysis} unit={p.unit} />
         </div>
       )}
 
@@ -232,21 +251,67 @@ function ApprovalCard({
             {expanded ? "E-postayı gizle" : "E-postayı önizle"}
           </button>
 
-          {expanded && (
-            <button
-              onClick={() => setIsEditing(v => !v)}
-              className={clsx(
-                "flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors font-medium",
-                isEditing
-                  ? "bg-brand-50 text-brand-700 border border-brand-200"
-                  : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+          <div className="flex items-center gap-1">
+            {/* Tone regeneration */}
+            <div className="relative">
+              <button
+                onClick={() => setShowTones(v => !v)}
+                disabled={regenerating}
+                className="flex items-center gap-1 text-xs px-2 py-1 rounded-md text-purple-600 hover:bg-purple-50 transition-colors font-medium disabled:opacity-50"
+                title="Farklı tonla yeniden yaz"
+              >
+                {regenerating
+                  ? <Loader2 size={11} className="animate-spin" />
+                  : <RefreshCw size={11} />
+                }
+                Yeniden Yaz
+              </button>
+
+              {showTones && (
+                <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-slate-200 rounded-lg shadow-lg z-10">
+                  {TONES.map(t => {
+                    const TIcon = t.icon;
+                    return (
+                      <button
+                        key={t.key}
+                        onClick={() => handleRegenerate(t.key)}
+                        className="w-full flex items-start gap-2 px-3 py-2 hover:bg-slate-50 first:rounded-t-lg last:rounded-b-lg transition-colors text-left"
+                      >
+                        <TIcon size={13} className="text-slate-500 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="text-xs font-semibold text-slate-700">{t.label}</p>
+                          <p className="text-[10px] text-slate-400">{t.desc}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               )}
-            >
-              {isEditing ? <X size={11} /> : <Pencil size={11} />}
-              {isEditing ? "Önizle" : "Düzenle"}
-            </button>
-          )}
+            </div>
+
+            {expanded && (
+              <button
+                onClick={() => setIsEditing(v => !v)}
+                className={clsx(
+                  "flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors font-medium",
+                  isEditing
+                    ? "bg-brand-50 text-brand-700 border border-brand-200"
+                    : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+                )}
+              >
+                {isEditing ? <X size={11} /> : <Pencil size={11} />}
+                {isEditing ? "Önizle" : "Düzenle"}
+              </button>
+            )}
+          </div>
         </div>
+
+        {regenerating && (
+          <div className="flex items-center gap-2 text-xs text-purple-600 bg-purple-50 rounded-lg px-3 py-2 mb-2">
+            <Loader2 size={12} className="animate-spin" />
+            Gemini e-postayı yeniden yazıyor...
+          </div>
+        )}
 
         {expanded && (
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 mb-3 text-xs">
@@ -299,7 +364,7 @@ function ApprovalCard({
         <div className="flex gap-2">
           <button
             onClick={handleApprove}
-            disabled={approving || rejecting}
+            disabled={approving || rejecting || regenerating}
             className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold py-2 px-3
                        rounded-lg bg-brand-600 text-white hover:bg-brand-700 transition-colors
                        disabled:opacity-50 disabled:cursor-not-allowed"
@@ -309,7 +374,7 @@ function ApprovalCard({
           </button>
           <button
             onClick={handleReject}
-            disabled={approving || rejecting}
+            disabled={approving || rejecting || regenerating}
             className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold py-2 px-3
                        rounded-lg bg-white text-red-600 border border-red-200 hover:bg-red-50
                        transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

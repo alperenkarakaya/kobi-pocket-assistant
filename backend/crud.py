@@ -172,6 +172,16 @@ def get_unread_count(db: Session) -> int:
     return db.query(models.Notification).filter(models.Notification.is_read == False).count()
 
 
+def mark_notification_read(db: Session, notif_id: int) -> models.Notification | None:
+    notif = db.query(models.Notification).filter(models.Notification.id == notif_id).first()
+    if not notif:
+        return None
+    notif.is_read = True
+    db.commit()
+    db.refresh(notif)
+    return notif
+
+
 def mark_all_notifications_read(db: Session) -> int:
     count = get_unread_count(db)
     db.query(models.Notification).filter(
@@ -215,3 +225,19 @@ def delete_supplier(db: Session, supplier_id: int) -> bool:
     db.delete(supplier)
     db.commit()
     return True
+
+
+# ── Telegram chats ─────────────────────────────────────────────────────────
+
+def register_telegram_chat(db: Session, chat_id: int) -> None:
+    exists = db.query(models.TelegramChat).filter(
+        models.TelegramChat.chat_id == chat_id
+    ).first()
+    if not exists:
+        db.add(models.TelegramChat(chat_id=chat_id))
+        db.commit()
+
+
+def get_telegram_chat_ids(db: Session) -> list[int]:
+    rows = db.query(models.TelegramChat).all()
+    return [r.chat_id for r in rows]

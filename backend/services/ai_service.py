@@ -358,3 +358,69 @@ Tam olarak şu JSON formatında döndür:
     except Exception as exc:
         logger.error("Email draft failed for %s: %s", product_name, exc)
         raise AIParsingError(f"E-posta taslağı oluşturulamadı: {exc}") from exc
+
+
+# ── Phase 4: Email tone regeneration ───────────────────────────────────────
+
+_TONE_DESCRIPTIONS = {
+    "urgent": "çok acil ve baskılayıcı — üretim durma riskini ve gecikmeden kaynaklanan zararı vurgula, en kısa sürede teslimat talep et",
+    "formal": "resmi ve kurumsal Türkçe — standart iş yazışması, net ve profesyonel, gereksiz söz yok",
+    "friendly": "samimi ve sıcak ama profesyonel — iş ilişkisini güçlendiren, kibarca ama net aciliyet belirten",
+}
+
+def regenerate_email_tone(
+    product_name: str,
+    unit: str,
+    current_stock: float,
+    threshold: float,
+    existing_subject: str,
+    existing_body: str,
+    tone: str = "formal",
+) -> dict:
+    """Rewrite an existing supplier email with the requested tone."""
+    if not _API_KEY:
+        raise APIKeyMissingError("GEMINI_API_KEY yapılandırılmamış.")
+
+    tone_desc = _TONE_DESCRIPTIONS.get(tone, _TONE_DESCRIPTIONS["formal"])
+
+    model = genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.75,
+            max_output_tokens=1024,
+        ),
+        system_instruction=_EMAIL_SYSTEM,
+    )
+
+    prompt = f"""
+Mevcut tedarik talebi e-postasını yeniden yaz. Ton: {tone_desc}.
+
+Ürün: {product_name} ({current_stock}/{threshold} {unit})
+
+Mevcut konu: {existing_subject}
+Mevcut içerik:
+{existing_body}
+
+Aynı bilgileri koru (ürün adı, miktar, kooperatif adı) ama tonu değiştir.
+Tam olarak şu JSON formatında döndür:
+{{
+  "subject": "<yeni konu>",
+  "body": "<yeni e-posta metni>"
+}}
+"""
+    try:
+        response = model.generate_content(prompt)
+        cleaned = response.text.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.splitlines()
+            cleaned = "\n".join(lines[1:-1]).strip()
+        result = json.loads(cleaned)
+        if "subject" not in result or "body" not in result:
+            raise AIParsingError("Yeniden yazılan e-postada alan eksik.")
+        return result
+    except AIParsingError:
+        raise
+    except Exception as exc:
+        logger.error("Email regeneration failed for %s: %s", product_name, exc)
+        raise AIParsingError(f"E-posta yeniden yazılamadı: {exc}") from exc
