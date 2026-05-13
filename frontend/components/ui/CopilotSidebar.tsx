@@ -8,6 +8,9 @@ import { clsx } from "clsx";
 import { apiFetch } from "@/lib/auth";
 import { useCopilot } from "@/components/CopilotContext";
 import type { PendingApproval } from "@/app/page";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -30,7 +33,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[82%] rounded-2xl rounded-tr-sm bg-brand-600 text-white px-4 py-2.5 text-sm leading-relaxed">
+        <div className="max-w-[82%] rounded-2xl rounded-tr-sm bg-brand-600 text-white px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
           {msg.text}
         </div>
       </div>
@@ -38,9 +41,9 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   }
 
   const variantClass: Record<MessageVariant, string> = {
-    success: "bg-gsuccess-50 border border-gsuccess-200 text-gsuccess-800",
-    warning: "bg-amber-50 border border-amber-200 text-amber-800",
-    error:   "bg-red-50 border border-red-200 text-red-700",
+    success: "bg-gsuccess-50 border border-gsuccess-200 text-gsuccess-800 prose-p:text-gsuccess-800 prose-strong:text-gsuccess-800",
+    warning: "bg-amber-50 border border-amber-200 text-amber-800 prose-p:text-amber-800 prose-strong:text-amber-800",
+    error:   "bg-red-50 border border-red-200 text-red-700 prose-p:text-red-700 prose-strong:text-red-700",
   };
 
   return (
@@ -51,10 +54,13 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
       <div
         className={clsx(
           "max-w-[85%] rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm leading-relaxed",
-          msg.variant ? variantClass[msg.variant] : "bg-slate-100 text-slate-700"
+          "prose prose-sm max-w-none prose-p:my-1 prose-pre:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0",
+          msg.variant ? variantClass[msg.variant] : "bg-slate-100 text-slate-700 prose-slate"
         )}
       >
-        {msg.text}
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+          {msg.text}
+        </ReactMarkdown>
       </div>
     </div>
   );
@@ -75,6 +81,31 @@ function TypingIndicator() {
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+const QUICK_CMDS = [
+  { label: "Stok listesi",    text: "Tüm stok durumunu listele" },
+  { label: "Kritik ürünler",  text: "Kritik seviyedeki ürünler hangileri?" },
+  { label: "Bugün ne oldu?",  text: "Bugünkü stok hareketlerini özetle" },
+  { label: "Genel durum",     text: "Genel envanter durumu nasıl?" },
+];
+
+function QuickCommands({ onSend }: { onSend: (text: string) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 px-4 py-2 border-b border-slate-100 bg-slate-50/60">
+      {QUICK_CMDS.map(({ label, text }) => (
+        <button
+          key={label}
+          onClick={() => onSend(text)}
+          className="text-[10px] font-medium px-2.5 py-1 rounded-full border border-slate-200
+                     text-slate-500 hover:border-brand-300 hover:text-brand-600
+                     hover:bg-brand-50 transition-colors whitespace-nowrap"
+        >
+          {label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -168,20 +199,21 @@ export default function CopilotSidebar() {
 
   // ── Chat send ────────────────────────────────────────────────────────────
 
-  const handleSend = useCallback(async () => {
-    const trimmed = input.trim();
+  const handleSend = useCallback(async (overrideText?: string) => {
+    const trimmed = (overrideText ?? input).trim();
     if (!trimmed || sending) return;
 
     const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: "user", text: trimmed };
     setMessages(prev => [...prev, userMsg]);
-    setInput("");
+    if (!overrideText) setInput("");
     setSending(true);
 
     try {
+      const history = messages.slice(-8).map(m => ({ role: m.role, text: m.text }));
       const res = await apiFetch("/api/webhook/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: trimmed }),
+        body: JSON.stringify({ text: trimmed, history }),
       });
       const data = await res.json() as { status: string; message: string };
 
@@ -198,7 +230,10 @@ export default function CopilotSidebar() {
       };
       setMessages(prev => [...prev, aiMsg]);
 
-      if (data.status === "success") fetchPendingCount();
+      if (data.status === "success") {
+        fetchPendingCount();
+        window.dispatchEvent(new CustomEvent("kobi:stock-updated"));
+      }
     } catch {
       setMessages(prev => [
         ...prev,
@@ -212,7 +247,7 @@ export default function CopilotSidebar() {
     } finally {
       setSending(false);
     }
-  }, [input, sending, fetchPendingCount]);
+  }, [input, sending, messages, fetchPendingCount]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -258,6 +293,9 @@ export default function CopilotSidebar() {
             <X size={16} />
           </button>
         </div>
+
+        {/* ── Quick commands ───────────────────────────────────────────── */}
+        <QuickCommands onSend={text => handleSend(text)} />
 
         {/* ── Feed area ────────────────────────────────────────────────── */}
         <div ref={feedRef} className="flex-1 overflow-y-auto p-4 space-y-3">

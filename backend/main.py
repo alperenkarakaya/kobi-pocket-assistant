@@ -147,7 +147,7 @@ async def lifespan(app: FastAPI):
         await telegram_app.updater.start_polling(drop_pending_updates=True)
         briefing_task = asyncio.create_task(_morning_briefing_loop(telegram_app))
         monitor_task = asyncio.create_task(_proactive_stock_monitor(telegram_app))
-        print("🤖 Telegram botu başlatıldı. Brifing zamanlayıcısı + stok monitörü aktif.")
+        print("[Telegram] Bot baslatildi. Brifing zamanlayicisi + stok monitoru aktif.")
 
     yield
 
@@ -159,7 +159,7 @@ async def lifespan(app: FastAPI):
         await telegram_app.updater.stop()
         await telegram_app.stop()
         await telegram_app.shutdown()
-        print("🤖 Telegram botu durduruldu.")
+        print("[Telegram] Bot durduruldu.")
 
 
 app = FastAPI(

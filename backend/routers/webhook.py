@@ -227,6 +227,8 @@ async def receive_message(
             detail="'text' veya 'image_base64' alanlarından biri zorunludur.",
         )
 
+    history = [{"role": h.role, "text": h.text} for h in (payload.history or [])]
+
     try:
         if payload.image_base64:
             try:
@@ -246,8 +248,52 @@ async def receive_message(
     except AIParsingError:
         if payload.image_base64:
             raise HTTPException(status_code=422, detail="Fotoğraf ayrıştırılamadı — daha net bir görsel deneyin.")
-        # Text message didn't match a stock command — treat as general chat
-        reply = ai_service.chat_reply(payload.text or "")
+
+        text = payload.text or ""
+
+        # Stok sorusu mu? DB'den gerçek verilerle cevapla
+        if ai_service.is_stock_query(text):
+            all_products = db.query(models.Product).all()
+            product_data = []
+            for p in all_products:
+                stock = (
+                    db.query(func.sum(models.StockMovement.quantity))
+                    .filter(models.StockMovement.product_id == p.id)
+                    .scalar() or 0.0
+                )
+                daily = 0.0
+                days_empty = None
+                if stock > 0:
+                    from datetime import datetime, timedelta
+                    week_ago = datetime.utcnow() - timedelta(days=7)
+                    out_7d = abs(
+                        db.query(func.sum(models.StockMovement.quantity))
+                        .filter(
+                            models.StockMovement.product_id == p.id,
+                            models.StockMovement.quantity < 0,
+                            models.StockMovement.timestamp >= week_ago,
+                        )
+                        .scalar() or 0.0
+                    )
+                    daily = round(out_7d / 7, 2)
+                    if daily > 0:
+                        days_empty = round(stock / daily, 1)
+
+                product_data.append({
+                    "name": p.name,
+                    "sku": p.sku,
+                    "unit": p.unit,
+                    "threshold": float(p.threshold),
+                    "current_stock": float(stock),
+                    "is_below_threshold": float(stock) < float(p.threshold),
+                    "days_to_empty": days_empty,
+                })
+
+            reply = ai_service.answer_stock_query(text, product_data, history)
+            return schemas.WebhookMessageResponse(status="chat", message=reply)
+
+        # Genel sohbet — geçmişle birlikte yanıtla
+        reply = ai_service.chat_reply(text, history)
         return schemas.WebhookMessageResponse(status="chat", message=reply)
 
     logger.info("AI parsed: product=%s qty=%s action=%s", parsed.product_name, parsed.quantity, parsed.action)
@@ -284,10 +330,34 @@ async def receive_message(
         type="stock_update",
     )
 
+    # Yeni stok seviyesini hesapla
+    new_stock = (
+        db.query(func.sum(models.StockMovement.quantity))
+        .filter(models.StockMovement.product_id == product.id)
+        .scalar() or 0.0
+    )
+
     verb = "sisteme eklendi" if parsed.action == "in" else "sistemden düşüldü"
+    message = f"✅ {parsed.quantity} {product.unit} {product.name} {verb}."
+
+    # Akıllı eşik uyarısı
+    if float(product.threshold) > 0 and new_stock < float(product.threshold):
+        ratio = int(new_stock / float(product.threshold) * 100)
+        if ratio < 30:
+            message += (
+                f"\n\n🔴 Kritik! {product.name} çok düşük: "
+                f"{new_stock:.0f}/{product.threshold:.0f} {product.unit} (%{ratio}). "
+                "Dashboard'dan tedarik analizi başlatabilirsiniz."
+            )
+        else:
+            message += (
+                f"\n\n⚠️ {product.name} eşiğin altında: "
+                f"{new_stock:.0f}/{product.threshold:.0f} {product.unit} (%{ratio})."
+            )
+
     return schemas.WebhookMessageResponse(
         status="success",
-        message=f"✅ {parsed.quantity} {product.unit} {product.name} {verb}.",
+        message=message,
         parsed=parsed.model_dump(),
         movement_id=movement.id,
     )

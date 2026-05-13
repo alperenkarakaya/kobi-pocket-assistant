@@ -308,7 +308,7 @@ Emoji kullanabilirsin ama abartma. Maksimum 3-4 cümle.
 """
 
 
-def chat_reply(text: str) -> str:
+def chat_reply(text: str, history: list[dict] | None = None) -> str:
     """Return a conversational Turkish reply for non-stock inputs."""
     if not _API_KEY:
         return "Merhaba! Ben KOBI asistanınızım. Size nasıl yardımcı olabilirim?"
@@ -321,11 +321,94 @@ def chat_reply(text: str) -> str:
             ),
             system_instruction=_CHAT_SYSTEM,
         )
-        response = model.generate_content(text)
+        prompt = text
+        if history:
+            hist_lines = [
+                f"{'Kullanıcı' if h['role'] == 'user' else 'Asistan'}: {h['text']}"
+                for h in history[-4:]
+            ]
+            prompt = "\n".join(hist_lines) + f"\nKullanıcı: {text}"
+        response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as exc:
         logger.error("chat_reply failed: %s", exc)
         return "Merhaba! Size nasıl yardımcı olabilirim? Stok güncellemesi için örn: '200 kg buğday teslim alındı' yazabilirsiniz."
+
+
+# ── Stock query detection & DB-aware answering ────────────────────────────
+
+_STOCK_QUERY_KEYWORDS = [
+    "ne kadar", "kaç", "var mı", "hangi", "listele", "göster",
+    "stok durumu", "nasıl", "bilgi ver", "kritik", "eksik",
+    "yeterli", "azaldı", "bitti", "kaldı", "toplam", "rapor",
+    "bugün", "dün", "hafta", "eşik", "stok", "ürün", "envanter",
+    "durum", "seviye", "hareketler", "özet",
+]
+
+
+def is_stock_query(text: str) -> bool:
+    """Returns True if the text looks like a stock information question."""
+    lower = text.lower()
+    return any(kw in lower for kw in _STOCK_QUERY_KEYWORDS)
+
+
+def answer_stock_query(
+    text: str,
+    products: list[dict],
+    history: list[dict] | None = None,
+) -> str:
+    """Answer a stock question using real-time DB data passed as product dicts."""
+    if not _API_KEY:
+        return "Stok bilgisi şu an kullanılamıyor — GEMINI_API_KEY eksik."
+
+    critical = [p for p in products if p["is_below_threshold"]]
+
+    stock_lines = []
+    for p in products:
+        status = "KRITIK" if p["is_below_threshold"] else "Normal"
+        days = f" (~{p['days_to_empty']:.0f} gün)" if p.get("days_to_empty") else ""
+        stock_lines.append(
+            f"  • {p['name']}: {p['current_stock']:.0f}/{p['threshold']:.0f} {p['unit']}"
+            f" [{status}{days}]"
+        )
+
+    stock_summary = "\n".join(stock_lines)
+
+    hist_text = ""
+    if history:
+        turns = [
+            f"{'Kullanıcı' if h['role'] == 'user' else 'Asistan'}: {h['text']}"
+            for h in history[-6:]
+        ]
+        hist_text = "Konuşma geçmişi:\n" + "\n".join(turns) + "\n\n"
+
+    system = (
+        "Sen Tire Tarım Kooperatifi'nin stok asistanı KOBI'sin. "
+        "Sana verilen anlık stok verisine göre soruyu yanıtla. "
+        "Kesin rakamlar kullan — uydurma. Kısa ve net Türkçe yaz. Emoji kullanabilirsin."
+    )
+
+    prompt = (
+        f"Güncel stok durumu ({len(products)} ürün, {len(critical)} kritik):\n"
+        f"{stock_summary}\n\n"
+        f"{hist_text}"
+        f"Soru: {text}"
+    )
+
+    try:
+        model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            generation_config=genai.GenerationConfig(
+                temperature=0.3,
+                max_output_tokens=600,
+            ),
+            system_instruction=system,
+        )
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as exc:
+        logger.error("answer_stock_query failed: %s", exc)
+        return "Stok bilgisi alınırken hata oluştu."
 
 
 # ── Phase 3: Email draft generator ────────────────────────────────────────

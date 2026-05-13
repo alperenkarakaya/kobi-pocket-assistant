@@ -169,6 +169,12 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [fetchDashboard]);
 
+  // Copilot'tan stok güncellemesi gelince anında yenile
+  useEffect(() => {
+    window.addEventListener("kobi:stock-updated", fetchDashboard);
+    return () => window.removeEventListener("kobi:stock-updated", fetchDashboard);
+  }, [fetchDashboard]);
+
   const handleAnalyze = async () => {
     setAnalyzing(true);
     setCrewStep(1);

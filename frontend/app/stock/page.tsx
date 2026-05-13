@@ -60,6 +60,17 @@ export default function StockPage() {
     });
   }, []);
 
+  // Copilot'tan stok güncellemesi gelince tabloyu yenile
+  useEffect(() => {
+    const handler = () => {
+      fetchProducts();
+      fetchAnalytics();
+      setMovementsFetched(false); // history sekmesi de yenilensin
+    };
+    window.addEventListener("kobi:stock-updated", handler);
+    return () => window.removeEventListener("kobi:stock-updated", handler);
+  }, [fetchProducts, fetchAnalytics]);
+
   const handleTabChange = (tab: ActiveTab) => {
     setActiveTab(tab);
     if (tab === "history" && !movementsFetched) {

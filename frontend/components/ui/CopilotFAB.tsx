@@ -4,7 +4,7 @@ import { Sparkles, ChevronLeft } from "lucide-react";
 import { useCopilot } from "@/components/CopilotContext";
 
 export default function CopilotFAB() {
-  const { toggle, pendingCount, isOpen } = useCopilot();
+  const { toggle, isOpen } = useCopilot();
 
   if (isOpen) return null;
 
@@ -22,15 +22,6 @@ export default function CopilotFAB() {
                  focus-visible:outline-none focus-visible:ring-2
                  focus-visible:ring-brand-500 focus-visible:ring-offset-2"
     >
-      {pendingCount > 0 && (
-        <span
-          className="absolute -top-2 -left-2 flex items-center justify-center
-                     w-5 h-5 bg-red-500 text-white text-[10px] font-bold rounded-full
-                     shadow border-2 border-white animate-pulse"
-        >
-          {pendingCount > 9 ? "9+" : pendingCount}
-        </span>
-      )}
 
       <ChevronLeft
         size={14}

@@ -2,8 +2,6 @@ import type { Metadata } from "next";
 import "./globals.css";
 import ConditionalNavigation from "@/components/ConditionalNavigation";
 import { CopilotProvider } from "@/components/CopilotContext";
-import CopilotSidebar from "@/components/ui/CopilotSidebar";
-import CopilotFAB from "@/components/ui/CopilotFAB";
 import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
@@ -18,8 +16,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <CopilotProvider>
           <ConditionalNavigation />
           <main>{children}</main>
-          <CopilotSidebar />
-          <CopilotFAB />
           <Toaster
             position="bottom-right"
             richColors

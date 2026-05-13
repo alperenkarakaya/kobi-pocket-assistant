@@ -204,11 +204,17 @@ class ManualStockRequest(BaseModel):
 
 # ── AI Webhook Message ─────────────────────────────────────────────────────
 
+class ConversationTurn(BaseModel):
+    role: str   # "user" | "ai"
+    text: str
+
+
 class WebhookMessagePayload(BaseModel):
     """Payload for POST /api/webhook/message — simulate Twilio/Telegram."""
     text: Optional[str] = None
     image_base64: Optional[str] = None
     mime_type: str = "image/jpeg"    # used when image_base64 is provided
+    history: Optional[list[ConversationTurn]] = None  # last N turns for context
 
 
 class WebhookMessageResponse(BaseModel):
