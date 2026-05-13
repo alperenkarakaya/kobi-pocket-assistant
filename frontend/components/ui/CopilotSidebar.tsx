@@ -230,7 +230,7 @@ export default function CopilotSidebar() {
       };
       setMessages(prev => [...prev, aiMsg]);
 
-      if (data.status === "success") {
+      if (data.status === "success" || data.status === "warning") {
         fetchPendingCount();
         window.dispatchEvent(new CustomEvent("kobi:stock-updated"));
       }

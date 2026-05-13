@@ -9,6 +9,7 @@ python-multipart
 Pillow
 google-generativeai
 google-auth
+google-auth-oauthlib
 crewai[google-genai]
 litellm
 starlette

@@ -33,7 +33,8 @@ if _API_KEY:
 class ParsedStockData(BaseModel):
     """Structured output from Gemini — one stock movement event."""
     product_name: str = Field(description="Product name in Turkish, e.g. 'Buğday'")
-    quantity: float = Field(description="Quantity (always a positive number)")
+    quantity: float = Field(description="Quantity exactly as stated in the message — never convert units")
+    unit: str = Field(default="adet", description="Unit exactly as stated: kg, ton, litre, adet, çuval, etc.")
     action: str = Field(description="Strictly 'in' (incoming) or 'out' (outgoing)")
     reason: str = Field(description="Brief Turkish explanation, e.g. 'İrsaliye Okundu'")
 
@@ -56,18 +57,22 @@ YALNIZCA aşağıdaki formatta geçerli JSON döndür — markdown, kod bloklar�
 açıklama OLMADAN:
 {
   "product_name": "<Türkçe ürün adı, kısa ve net>",
-  "quantity": <sıfırdan büyük pozitif sayı>,
+  "quantity": <mesajdaki sayıyı AYNEN yaz — BİRİM DÖNÜŞÜMÜ YAPMA>,
+  "unit": "<mesajdaki birimi AYNEN yaz: kg, ton, litre, adet, çuval, vb. — belirtilmemişse 'adet'>",
   "action": "<tam olarak 'in' veya 'out'>",
   "reason": "<kısa Türkçe açıklama>"
 }
 
+ÖNEMLİ KURAL: quantity ve unit alanlarına mesajdaki değerleri birebir yaz.
+Asla birim dönüşümü yapma. 500 kg → quantity:500, unit:"kg". 2 ton → quantity:2, unit:"ton".
+
 Eylem Kuralları:
-- 'in'  → teslim, sevk, giriş, alındı, geldi, satın alındı, temin edildi
-- 'out' → satış, çıkış, tüketim, kullanıldı, verildi, dağıtıldı, harcandı
+- 'in'  → teslim alındı, alındı, geldi, girdi, eklendi, satın alındı, temin edildi, stoka girdi, sevk alındı
+- 'out' → satıldı, satış, gönderildi, sevk edildi, çıktı, çıkış, tüketildi, kullanıldı, verildi, dağıtıldı, harcandı, azaldı, düştü, eksildi
 
 Fotoğraf Kuralları:
 - Belgeden ürün adını, miktarı ve birimi oku
-- Birimi reason alanına ekle (örn. 'İrsaliye Okundu — 250 kg')
+- Birimi unit alanına yaz, reason alanına da ekle (örn. 'İrsaliye Okundu — 250 kg')
 - Eğer belge bir teslimat/alım fişiyse → action = 'in'
 - Eğer belge bir satış/çıkış fişiyse → action = 'out'
 - Belgede birden fazla ürün varsa: en büyük miktarlı veya ilk satırdaki ürünü seç
@@ -241,6 +246,7 @@ def _parse_response(raw: str) -> ParsedStockData:
     action = str(data.get("action", "in")).lower().strip()
     data["action"] = action if action in ("in", "out") else "in"
     data["quantity"] = abs(float(data.get("quantity", 0) or 0))
+    data["unit"] = str(data.get("unit") or "adet").strip() or "adet"
 
     if data["quantity"] == 0:
         raise AIParsingError("Gemini sıfır miktar döndürdü — mesaj yeniden kontrol edilmeli.")
@@ -286,6 +292,7 @@ def _parse_multi_response(raw: str) -> list[ParsedStockData]:
             action = str(item.get("action", "in")).lower().strip()
             item["action"] = action if action in ("in", "out") else "in"
             item["quantity"] = abs(float(item.get("quantity", 0) or 0))
+            item["unit"] = str(item.get("unit") or "adet").strip() or "adet"
             if item["quantity"] == 0:
                 continue
             result.append(ParsedStockData(**item))

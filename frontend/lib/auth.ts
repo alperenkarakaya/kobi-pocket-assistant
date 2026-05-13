@@ -1,4 +1,3 @@
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const COOKIE = "kobi_token";
 
 export function getToken(): string | null {
@@ -24,7 +23,7 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
     ? Object.fromEntries(new Headers(init.headers).entries())
     : {};
 
-  const res = await fetch(`${API}${path}`, {
+  const res = await fetch(path, {
     ...init,
     headers: { ...baseHeaders, ...initHeaders },
   });

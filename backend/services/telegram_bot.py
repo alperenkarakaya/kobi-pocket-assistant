@@ -33,6 +33,7 @@ import models
 from database import SessionLocal
 from services import ai_service
 from services.product_service import find_product
+from services.unit_converter import convert_quantity
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
-        signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
+        converted_qty = convert_quantity(parsed.quantity, parsed.unit, product.unit)
+        signed_qty = converted_qty if parsed.action == "in" else -converted_qty
         db.add(models.StockMovement(
             product_id=product.id,
             quantity=signed_qty,
@@ -303,17 +305,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             .scalar() or 0.0
         )
 
-        # Create notification for Telegram stock update
         import crud as _crud
         verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
         _crud.create_notification(
             db,
-            title=f"{verb_tr} (Telegram): {parsed.quantity} {product.unit} {product.name}",
+            title=f"{verb_tr} (Telegram): {converted_qty:.4g} {product.unit} {product.name}",
             body=parsed.reason,
             type="stock_update",
         )
 
         verb = "stoka eklendi ✅" if parsed.action == "in" else "stoktan düşüldü 📤"
+        conv_note = f" ({converted_qty:.4g} {product.unit})" if parsed.unit.lower() != product.unit.lower() else ""
         status_line = ""
         if product.threshold > 0:
             ratio = new_stock / product.threshold
@@ -322,8 +324,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             elif new_stock < product.threshold:
                 status_line = f"\n⚠️ Eşik altı (%{int(ratio * 100)})"
         await update.message.reply_text(
-            f"*{parsed.quantity} {product.unit} {product.name}* {verb}\n"
-            f"📦 Yeni stok: *{new_stock:.1f} {product.unit}* / eşik {product.threshold:.0f}"
+            f"*{parsed.quantity} {parsed.unit}{conv_note} {product.name}* {verb}\n"
+            f"📦 Yeni stok: *{new_stock:.4g} {product.unit}* / eşik {product.threshold:.4g}"
             f"{status_line}\n"
             f"_{parsed.reason}_",
             parse_mode="Markdown",
@@ -355,7 +357,8 @@ async def _process_image_bytes(
         )
         return
 
-    signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
+    converted_qty = convert_quantity(parsed.quantity, parsed.unit, product.unit)
+    signed_qty = converted_qty if parsed.action == "in" else -converted_qty
     movement = models.StockMovement(
         product_id=product.id,
         quantity=signed_qty,
@@ -369,7 +372,7 @@ async def _process_image_bytes(
     verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
     _crud.create_notification(
         db,
-        title=f"{verb_tr} (Telegram Fotoğraf): {parsed.quantity} {product.unit} {product.name}",
+        title=f"{verb_tr} (Telegram Fotoğraf): {converted_qty:.4g} {product.unit} {product.name}",
         body=parsed.reason,
         type="stock_update",
     )
@@ -382,6 +385,7 @@ async def _process_image_bytes(
     )
 
     verb = "stoka eklendi ✅" if parsed.action == "in" else "stoktan düşüldü 📤"
+    conv_note = f" ({converted_qty:.4g} {product.unit})" if parsed.unit.lower() != product.unit.lower() else ""
     status_line = ""
     if product.threshold > 0:
         ratio = new_stock / product.threshold
@@ -391,8 +395,8 @@ async def _process_image_bytes(
             status_line = f"\n⚠️ Eşik altı (%{int(ratio * 100)})"
     await update.message.reply_text(
         f"📄 İrsaliye okundu!\n"
-        f"*{parsed.quantity} {product.unit} {product.name}* {verb}\n"
-        f"📦 Yeni stok: *{new_stock:.1f} {product.unit}* / eşik {product.threshold:.0f}"
+        f"*{parsed.quantity} {parsed.unit}{conv_note} {product.name}* {verb}\n"
+        f"📦 Yeni stok: *{new_stock:.4g} {product.unit}* / eşik {product.threshold:.4g}"
         f"{status_line}\n"
         f"_{parsed.reason}_",
         parse_mode="Markdown",

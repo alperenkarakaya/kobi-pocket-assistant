@@ -9,8 +9,6 @@ import {
 import { clsx } from "clsx";
 import type { PendingApproval } from "@/app/page";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface AgentAnalysis {
@@ -166,7 +164,7 @@ function ApprovalCard({
     setRegenerating(true);
     if (!expanded) setExpanded(true);
     try {
-      const res = await fetch(`${API}/api/actions/${approval.id}/regenerate`, {
+      const res = await fetch(`/api/actions/${approval.id}/regenerate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tone }),

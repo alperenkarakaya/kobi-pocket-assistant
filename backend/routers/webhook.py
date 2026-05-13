@@ -34,6 +34,7 @@ from database import SessionLocal, get_db
 from services import ai_service
 from services.ai_service import AIParsingError, APIKeyMissingError
 from services.product_service import find_product as _find_product
+from services.unit_converter import convert_quantity
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Webhook"])
@@ -296,7 +297,7 @@ async def receive_message(
         reply = ai_service.chat_reply(text, history)
         return schemas.WebhookMessageResponse(status="chat", message=reply)
 
-    logger.info("AI parsed: product=%s qty=%s action=%s", parsed.product_name, parsed.quantity, parsed.action)
+    logger.info("AI parsed: product=%s qty=%s unit=%s action=%s", parsed.product_name, parsed.quantity, parsed.unit, parsed.action)
 
     product = _find_product(db, parsed.product_name)
     if not product:
@@ -312,7 +313,8 @@ async def receive_message(
             parsed=parsed.model_dump(),
         )
 
-    signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
+    converted_qty = convert_quantity(parsed.quantity, parsed.unit, product.unit)
+    signed_qty = converted_qty if parsed.action == "in" else -converted_qty
     source = "invoice_photo" if payload.image_base64 else "whatsapp_text"
     movement = models.StockMovement(
         product_id=product.id, quantity=signed_qty,
@@ -322,10 +324,15 @@ async def receive_message(
     db.commit()
     db.refresh(movement)
 
+    qty_display = (
+        f"{parsed.quantity} {parsed.unit}"
+        if parsed.unit.lower() != product.unit.lower()
+        else f"{converted_qty:.4g} {product.unit}"
+    )
     verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
     _crud.create_notification(
         db,
-        title=f"{verb_tr}: {parsed.quantity} {product.unit} {product.name}",
+        title=f"{verb_tr}: {converted_qty:.4g} {product.unit} {product.name}",
         body=f"Kaynak: {source}" + (f" | Not: {parsed.reason}" if parsed.reason else ""),
         type="stock_update",
     )
@@ -338,7 +345,8 @@ async def receive_message(
     )
 
     verb = "sisteme eklendi" if parsed.action == "in" else "sistemden düşüldü"
-    message = f"✅ {parsed.quantity} {product.unit} {product.name} {verb}."
+    conv_note = f" ({converted_qty:.4g} {product.unit})" if parsed.unit.lower() != product.unit.lower() else ""
+    message = f"✅ {parsed.quantity} {parsed.unit}{conv_note} {product.name} {verb}."
 
     # Akıllı eşik uyarısı
     if float(product.threshold) > 0 and new_stock < float(product.threshold):
@@ -443,7 +451,8 @@ async def receive_whatsapp(
                 reply_lines.append(f"⚠️ {parsed.product_name} — kayıtlı değil, atlandı")
                 continue
 
-            signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
+            converted_qty = convert_quantity(parsed.quantity, parsed.unit, product.unit)
+            signed_qty = converted_qty if parsed.action == "in" else -converted_qty
             db.add(models.StockMovement(
                 product_id=product.id,
                 quantity=signed_qty,
@@ -462,7 +471,7 @@ async def receive_whatsapp(
             verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
             _crud.create_notification(
                 db,
-                title=f"{verb_tr} (WhatsApp foto): {_fmt(parsed.quantity)} {product.unit} {product.name}",
+                title=f"{verb_tr} (WhatsApp foto): {_fmt(converted_qty)} {product.unit} {product.name}",
                 body=f"Gönderen: {From}",
                 type="stock_update",
             )
@@ -478,8 +487,9 @@ async def receive_whatsapp(
                     status = " 🔴 KRİTİK"
                 elif new_stock < float(product.threshold):
                     status = " ⚠️ eşik altı"
+            qty_label = f"{_fmt(parsed.quantity)} {parsed.unit}" if parsed.unit.lower() != product.unit.lower() else f"{_fmt(converted_qty)} {product.unit}"
             reply_lines.append(
-                f"{verb} {_fmt(parsed.quantity)} {product.unit} {product.name}"
+                f"{verb} {qty_label} {product.name}"
                 f" → {_fmt(new_stock)} {product.unit}{status}"
             )
 
@@ -526,7 +536,8 @@ async def receive_whatsapp(
         )
 
     # ── Record the stock movement ──────────────────────────────────────────
-    signed_qty = parsed.quantity if parsed.action == "in" else -parsed.quantity
+    converted_qty = convert_quantity(parsed.quantity, parsed.unit, product.unit)
+    signed_qty = converted_qty if parsed.action == "in" else -converted_qty
     db.add(models.StockMovement(
         product_id=product.id,
         quantity=signed_qty,
@@ -545,7 +556,7 @@ async def receive_whatsapp(
     verb_tr = "Stok girişi" if parsed.action == "in" else "Stok çıkışı"
     _crud.create_notification(
         db,
-        title=f"{verb_tr} (WhatsApp): {_fmt(parsed.quantity)} {product.unit} {product.name}",
+        title=f"{verb_tr} (WhatsApp): {_fmt(converted_qty)} {product.unit} {product.name}",
         body=f"Gönderen: {From}" + (f" | Not: {parsed.reason}" if parsed.reason else ""),
         type="stock_update",
     )
@@ -557,7 +568,7 @@ async def receive_whatsapp(
     return _twiml(_build_stock_reply(
         product_name=product.name,
         unit=product.unit,
-        quantity=parsed.quantity,
+        quantity=converted_qty,
         action=parsed.action,
         reason=parsed.reason or "",
         new_stock=new_stock,
