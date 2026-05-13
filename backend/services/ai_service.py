@@ -304,7 +304,7 @@ Sen Tire Tarım Kooperatifi'nin yapay zeka asistanı KOBI'sin.
 Kooperatif yöneticilerine samimi ve kısa Türkçe yanıtlar ver.
 Stok, tarım, tedarik zinciri veya günlük operasyonlarla ilgili soruları yanıtla.
 Stok güncellemesi için '200 kg buğday teslim alındı' gibi doğal cümle yazılabileceğini hatırlat.
-Emoji kullanabilirsin ama abartma. Maksimum 3-4 cümle.
+Emoji kullanabilirsin ama abartma. Yanıtları kısa ve net tut.
 """
 
 
@@ -317,7 +317,7 @@ def chat_reply(text: str, history: list[dict] | None = None) -> str:
             model_name=GEMINI_MODEL,
             generation_config=genai.GenerationConfig(
                 temperature=0.8,
-                max_output_tokens=300,
+                max_output_tokens=800,
             ),
             system_instruction=_CHAT_SYSTEM,
         )
@@ -400,7 +400,7 @@ def answer_stock_query(
             model_name=GEMINI_MODEL,
             generation_config=genai.GenerationConfig(
                 temperature=0.3,
-                max_output_tokens=600,
+                max_output_tokens=1500,
             ),
             system_instruction=system,
         )

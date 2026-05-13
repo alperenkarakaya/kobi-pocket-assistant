@@ -341,7 +341,7 @@ export default function CopilotSidebar() {
               />
             </div>
             <button
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={!input.trim() || sending}
               className="btn-primary h-10 w-10 flex-shrink-0 justify-center px-0"
               aria-label="Gönder"
